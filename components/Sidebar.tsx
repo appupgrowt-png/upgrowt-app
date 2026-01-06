@@ -21,18 +21,18 @@ const MenuButton: React.FC<{
 }> = ({ icon, label, active, locked, onClick, lang }) => (
   <button 
     onClick={locked ? undefined : onClick}
-    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-300 group relative ${
+    className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-300 group relative mb-1 ${
       locked 
         ? 'opacity-50 cursor-not-allowed hover:bg-transparent' 
         : active 
           ? 'bg-primary-500/10 text-primary-400 border border-primary-500/20 shadow-[0_0_15px_rgba(6,182,212,0.1)]' 
-          : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
+          : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent hover:border-white/5'
     }`}
   >
-    <div className={`${active ? 'text-primary-400' : locked ? 'text-slate-600' : 'text-slate-500 group-hover:text-white'}`}>
+    <div className={`transition-transform duration-300 ${active ? 'text-primary-400 scale-110' : locked ? 'text-slate-600' : 'text-slate-500 group-hover:text-white group-hover:scale-110'}`}>
       {icon}
     </div>
-    <span className={`font-medium text-sm ${active ? 'font-bold' : ''}`}>{label}</span>
+    <span className={`font-medium text-sm tracking-wide ${active ? 'font-bold' : ''}`}>{label}</span>
     
     {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary-400 shadow-[0_0_8px_#22d3ee]"></div>}
     
@@ -63,27 +63,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
   const isContentUnlocked = currentPhaseIndex >= 2; 
 
   return (
-    <div className="fixed left-0 top-0 h-full w-64 bg-[#020617]/95 backdrop-blur-xl border-r border-white/5 flex flex-col z-50 hidden md:flex">
-      {/* Brand */}
-      <div className="h-24 flex flex-col justify-center px-6 border-b border-white/5 relative overflow-hidden">
-        {/* Subtle glow behind logo */}
-        <div className="absolute top-0 left-0 w-32 h-24 bg-primary-500/5 blur-xl"></div>
+    <div className="fixed left-0 top-0 h-full w-72 bg-[#020617] border-r border-white/5 flex flex-col z-50 hidden md:flex shadow-2xl">
+      {/* Brand Header */}
+      <div className="h-32 flex flex-col justify-center px-8 border-b border-white/5 relative overflow-hidden shrink-0">
+        {/* Spotlights */}
+        <div className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-40 h-40 bg-primary-500/10 rounded-full blur-[50px] pointer-events-none"></div>
+        <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full blur-[40px] pointer-events-none"></div>
         
-        <div className="relative z-10">
+        <div className="relative z-10 flex flex-col items-start gap-3">
           <img 
             src="/logo-light.png" 
             alt="UpGrowth" 
-            className="h-8 w-auto object-contain mb-1" 
+            className="h-9 w-auto object-contain" 
           />
-          <p className="text-[10px] text-primary-400 font-bold tracking-[0.2em] uppercase pl-1 opacity-80">
-            AI Marketing Director
-          </p>
+          <div className="px-2 py-1 rounded bg-gradient-to-r from-slate-800 to-slate-900 border border-white/10 backdrop-blur-md">
+            <p className="text-[10px] text-primary-300 font-bold tracking-[0.15em] uppercase flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
+              AI Director
+            </p>
+          </div>
         </div>
       </div>
 
       {/* Menu */}
-      <div className="flex-1 py-8 px-4 space-y-1 overflow-y-auto overflow-x-hidden">
-        <div className="text-[10px] text-slate-600 font-bold uppercase tracking-widest px-4 mb-2">{t('direction', lang)}</div>
+      <div className="flex-1 py-8 px-5 space-y-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
+        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest px-4 mb-3 opacity-80">{t('direction', lang)}</div>
         
         <MenuButton 
           active={activeView === 'dashboard'}
@@ -107,7 +111,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>} 
         />
 
-        <div className="text-[10px] text-slate-600 font-bold uppercase tracking-widest px-4 mb-2 mt-6">{t('execution', lang)}</div>
+        <div className="my-6 border-t border-white/5"></div>
+
+        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest px-4 mb-3 opacity-80">{t('execution', lang)}</div>
 
         <MenuButton 
           label={t('content', lang)} 
@@ -126,30 +132,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
         />
 
         {/* AI Consultant Float */}
-        <div className="mt-8 px-4">
+        <div className="mt-8 px-1">
            <div 
-             className="bg-gradient-to-b from-primary-900/20 to-slate-900 border border-primary-500/20 rounded-xl p-4 relative overflow-hidden group cursor-pointer hover:border-primary-500/40 transition-all"
+             className="bg-gradient-to-b from-slate-800/50 to-slate-900 border border-white/5 rounded-xl p-4 relative overflow-hidden group cursor-pointer hover:border-primary-500/30 transition-all hover:shadow-[0_0_20px_rgba(34,211,238,0.1)]"
              onClick={() => onNavigate?.('consultant')}
            >
-              <div className="absolute top-0 left-0 w-full h-1 bg-primary-500"></div>
-              <div className="flex items-center gap-3 mb-2">
-                 <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center border border-white/10">
+              <div className="flex items-center gap-3 mb-2 relative z-10">
+                 <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center border border-white/10 shadow-inner group-hover:scale-110 transition-transform">
                    <span className="text-lg">🤖</span>
                  </div>
                  <div>
-                    <span className="text-xs font-bold text-white block">{t('consultant', lang)}</span>
-                    <span className="text-xs text-primary-400 flex items-center gap-1">
+                    <span className="text-xs font-bold text-white block group-hover:text-primary-300 transition-colors">{t('consultant', lang)}</span>
+                    <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                       Online
                     </span>
                  </div>
               </div>
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
            </div>
         </div>
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-white/5 space-y-1">
+      <div className="p-5 border-t border-white/5 space-y-1 bg-[#020617]">
         <MenuButton 
           label={t('settings', lang)} 
           onClick={onSettings}
@@ -160,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
           label={t('logout', lang)} 
           onClick={onLogout}
           lang={lang}
-          icon={<svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>} 
+          icon={<svg className="w-5 h-5 text-red-400 group-hover:text-red-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>} 
         />
       </div>
     </div>

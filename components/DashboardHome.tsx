@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { ComprehensiveStrategy, RoadmapPhase, UserProfile, Language, ExecutionStep, ExecutionState } from '../types';
 import { TacticalDeck } from './DashboardSections';
@@ -309,7 +308,7 @@ const GuidedExecutionTracker: React.FC<{
           <Button onClick={handleGenerateDeliverable} isLoading={isGenerating} className="w-full md:w-auto mx-auto shadow-neon text-lg px-8">
             {lang === 'en' ? '✨ Generate Strategic Document' : '✨ Generar Documento Estratégico'}
           </Button>
-          <p className="text-[10px] text-slate-600 mt-2">
+          <p className="text-slate-600 mt-2 text-[10px]">
             {lang === 'en' ? 'AI will compile your answers into a professional report.' : 'La IA compilará tus respuestas en un reporte profesional.'}
           </p>
         </div>
@@ -522,19 +521,66 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     if (activeSidebarAction === 'consultant') setIsConsultantOpen(true);
   }, [activeSidebarAction]);
 
+  // Styling for the "now" keyword
+  const textRaw = t('weekly_dir_sub', lang);
+  const highlightedWord = lang === 'en' ? 'now' : 'ahora';
+  
+  // Render logic for the fancy text
+  const renderHeroText = () => {
+    const parts = textRaw.split(highlightedWord);
+    if (parts.length === 1) return textRaw;
+    
+    return (
+      <>
+        {parts[0]}
+        <span className="bg-gradient-to-r from-cyan-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent animate-pulse-slow inline-block transform hover:scale-105 transition-transform duration-300">
+          {highlightedWord}
+        </span>
+        {parts[1]}
+      </>
+    );
+  };
+
   return (
     <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mx-auto space-y-8 animate-fade-in pb-20 px-4 md:px-6">
+      
       {/* Header - Weekly Direction Ritual */}
-      <div className="flex justify-between items-end pb-4 border-b border-white/5">
-        <div>
-           <p className="text-slate-500 text-sm uppercase tracking-widest mb-1">{t('weekly_dir_title', lang)}</p>
-           <h1 className="text-xl md:text-2xl font-bold text-white max-w-3xl leading-tight">
-             "{t('weekly_dir_sub', lang)}"
-           </h1>
+      <div className="relative border-b border-white/5 pb-8 mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-end gap-6">
+          <div className="space-y-4 max-w-4xl">
+             {/* Eyebrow Label with Business Name */}
+             <div className="flex items-center gap-2.5">
+               <div className="w-5 h-5 rounded-full bg-cyan-900/30 border border-cyan-500/30 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-cyan-400 animate-[spin_4s_linear_infinite]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+               </div>
+               <span className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase">
+                 <span className="text-white opacity-90">{businessName}</span>
+                 <span className="mx-2 text-cyan-500/30">|</span>
+                 {t('weekly_dir_title', lang)}
+               </span>
+             </div>
+             
+             {/* Main Hero Text with Business Name Gradient */}
+             <h1 className="text-3xl md:text-4xl lg:text-5xl font-black text-white leading-[1.15] tracking-tight">
+               <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mr-2">
+                 {businessName},
+               </span>
+               <span className="text-white">
+                 "{renderHeroText()}"
+               </span>
+             </h1>
+          </div>
+          
+          <button 
+            onClick={() => setIsCheckinOpen(true)} 
+            className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-slate-900/50 border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-900/10 transition-all duration-300"
+          >
+            <span className="w-2 h-2 rounded-full bg-slate-500 group-hover:bg-cyan-400 transition-colors"></span>
+            <span className="text-xs font-bold text-slate-400 group-hover:text-cyan-100 uppercase tracking-wide">
+              {t('weekly_ritual', lang)}
+            </span>
+          </button>
         </div>
-        <button onClick={() => setIsCheckinOpen(true)} className="text-xs text-slate-500 hover:text-white underline decoration-dashed whitespace-nowrap ml-4">
-          {t('weekly_ritual', lang)}
-        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
