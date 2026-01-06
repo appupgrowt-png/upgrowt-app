@@ -1,4 +1,3 @@
-
 import { supabase } from '../lib/supabase';
 import { UserProfile, ComprehensiveStrategy, ExecutionState, WeeklyAgencyPlan } from '../types';
 
@@ -11,6 +10,7 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
       business_name: profile.businessName,
       industry: profile.offering,
       stage: profile.businessAge,
+      profile_data: profile // Persist full JSON to ensure recovery
     }, { onConflict: 'user_id' })
     .select()
     .single();
@@ -37,7 +37,7 @@ export const loadUserData = async (userId: string) => {
   // A. Get Business
   const { data: business, error: busError } = await supabase
     .from('business_profiles')
-    .select('id, business_name')
+    .select('id, business_name, profile_data')
     .eq('user_id', userId)
     .single();
 
@@ -57,9 +57,13 @@ export const loadUserData = async (userId: string) => {
     .eq('business_id', business.id)
     .single();
 
+  // Resolve Profile: Prefer strategy snapshot (latest state), fallback to business profile_data
+  // This ensures that if strategy generation failed or wasn't saved, we still have the profile form data.
+  const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
+
   return {
     businessId: business.id,
-    profile: strategyData?.strategy_snapshot?.profile as UserProfile || null,
+    profile: resolvedProfile,
     strategy: strategyData?.strategy_snapshot?.strategy as ComprehensiveStrategy || null,
     executionState: progressData?.execution_state || {},
     weeklyPlan: progressData?.weekly_state || null

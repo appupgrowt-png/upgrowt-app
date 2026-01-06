@@ -21,7 +21,7 @@ import { t } from './utils/i18n';
 import { supabase } from './lib/supabase';
 
 // NEW: Added 'transition' state
-type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency';
+type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'error';
 
 export default function MainApp() {
   // Auth State
@@ -43,6 +43,10 @@ export default function MainApp() {
   const [view, setView] = useState<ViewState>('loading');
   const [sidebarAction, setSidebarAction] = useState<string>('');
   const [language, setLanguage] = useState<Language>('es');
+  const [appError, setAppError] = useState<string | null>(null);
+
+  // Recovery State
+  const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -68,21 +72,33 @@ export default function MainApp() {
             setStrategy(data.strategy);
             setAudit(data.strategy.audit);
             
+            // LOGIC: If they have a weekly plan, go there. If not, Dashboard.
             if (data.weeklyPlan) {
               setView('weekly_agency');
             } else {
               setView('dashboard');
             }
           } else {
-             setView('onboarding'); 
+             // Profile exists, but Strategy missing. 
+             // Triggers auto-recovery instead of sending to onboarding form.
+             console.log("Profile found, recovering strategy...");
+             setShouldRecoverStrategy(true);
           }
         } else {
           // User exists but NO profile -> They just logged in for the first time
           setView('transition');
         }
-      } catch (e) {
+      } catch (e: any) {
         console.error("Load Error", e);
-        if (mounted) setView('auth');
+        if (mounted) {
+           // If error implies missing columns or DB issues, show error view
+           if (e.message?.includes('column') || e.code === '42703') {
+             setAppError("Error de Base de Datos: Faltan columnas necesarias. Por favor ejecuta el script SQL de migración en Supabase.");
+             setView('error');
+           } else {
+             setView('auth');
+           }
+        }
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -133,7 +149,15 @@ export default function MainApp() {
     if (session && businessId && profile && strategy && !isLoading) {
        saveStrategySnapshot(businessId, profile, strategy).catch(console.error);
     }
-  }, [strategy, session, businessId, profile]);
+  }, [strategy, session, businessId, profile, isLoading]);
+
+  // --- AUTO RECOVERY EFFECT ---
+  useEffect(() => {
+    if (shouldRecoverStrategy && profile && session) {
+      setShouldRecoverStrategy(false);
+      handleProfileSave(profile);
+    }
+  }, [shouldRecoverStrategy, profile, session]);
 
 
   // --- HANDLERS ---
@@ -155,7 +179,7 @@ export default function MainApp() {
     if (!session?.user?.id) return;
 
     setIsLoading(true);
-    setLoadingMessage('Guardando perfil...');
+    setLoadingMessage('Generando estrategia directiva...');
     
     try {
       // 1. Save profile to DB
@@ -188,10 +212,15 @@ export default function MainApp() {
       // 4. Move to Report View (Now that we have audit)
       setView('report'); 
       
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Ocurrió un error al generar tu diagnóstico. Por favor intenta de nuevo.");
-      setView('onboarding'); // Fallback so user can retry
+      if (e.message?.includes('column')) {
+         setAppError("Error de DB: Faltan columnas. Ejecuta el SQL de migración.");
+         setView('error');
+      } else {
+         alert("Ocurrió un error al generar tu diagnóstico. Por favor intenta de nuevo.");
+         setView('onboarding'); // Fallback so user can retry
+      }
     } finally {
       setIsLoading(false);
     }
@@ -308,6 +337,19 @@ export default function MainApp() {
   };
 
   // --- RENDER ---
+
+  if (view === 'error') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
+        <div className="glass-panel p-10 border-red-500/20 max-w-lg">
+           <div className="text-5xl mb-4">🛠️</div>
+           <h2 className="text-2xl font-bold text-white mb-2">Configuración de Base de Datos Requerida</h2>
+           <p className="text-slate-400 mb-6">{appError}</p>
+           <Button onClick={() => window.location.reload()}>Reintentar</Button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
