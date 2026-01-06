@@ -1,36 +1,25 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, Tone } from '../types';
 import { Button } from './ui/Button';
 import { generateCoreMessage } from '../services/geminiService';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowRight, Check } from 'lucide-react';
 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
 }
 
-// --- CONSTANTS & OPTIONS ---
-
+// --- CONSTANTS & OPTIONS (Keeping existing logic) ---
 const BUSINESS_AGES = ['Estoy empezando', 'Menos de 1 año', '1–3 años', '3–5 años', 'Más de 5 años'];
 const ACQUISITION_CHANNELS = ['Instagram', 'Facebook', 'TikTok', 'WhatsApp', 'Recomendaciones', 'Página web', 'Otro'];
-const SALES_FRICTIONS = [
-  'Preguntan precio y desaparecen', 
-  'Preguntan mucho antes de decidir', 
-  'Compran rápido', 
-  'Comparan con otros', 
-  'Aún no recibo muchos mensajes'
-];
+const SALES_FRICTIONS = ['Preguntan precio y desaparecen', 'Preguntan mucho antes de decidir', 'Compran rápido', 'Comparan con otros', 'Aún no recibo muchos mensajes'];
 const CLIENT_TYPES = ['Personas', 'Negocios', 'Ambos'];
 const CLIENT_WORRIES = ['Falta de tiempo', 'Falta de resultados', 'Confusión', 'Estrés', 'Falta de ventas', 'Otro'];
 const WHY_CHOSEN = ['Precio', 'Rapidez', 'Trato personalizado', 'Resultados', 'Experiencia', 'Confianza', 'No estoy seguro'];
 const ANTI_PERSONAS = ['Regateadores', 'Impacientes', 'Que no siguen procesos', 'Que no valoran el trabajo', 'Otro'];
 const GOALS = ['Más mensajes', 'Más ventas', 'Más claridad', 'Mejor contenido', 'Menos estrés', 'Mejor organización'];
-const FRUSTRATIONS = [
-  'No sé qué publicar', 
-  'Publico y no pasa nada', 
-  'No tengo tiempo', 
-  'He probado cosas y no funcionaron', 
-  'No entiendo qué funciona'
-];
+const FRUSTRATIONS = ['No sé qué publicar', 'Publico y no pasa nada', 'No tengo tiempo', 'He probado cosas y no funcionaron', 'No entiendo qué funciona'];
 
 // --- HELPER COMPONENTS ---
 
@@ -53,7 +42,7 @@ const CheckboxBtn: React.FC<BtnProps> = ({ selected, label, onClick }) => (
     <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
       selected ? 'bg-primary-500 border-primary-500' : 'border-slate-600 group-hover:border-slate-500'
     }`}>
-      {selected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+      {selected && <Check className="w-3 h-3 text-white" />}
     </div>
   </button>
 );
@@ -71,6 +60,40 @@ const RadioBtn: React.FC<BtnProps> = ({ selected, label, onClick }) => (
   </button>
 );
 
+// --- ROTATING TEXT COMPONENT FOR WELCOME SCREEN ---
+const RotatingText = () => {
+  const phrases = [
+    "Pensamos por tu negocio.",
+    "Ejecutamos contigo.",
+    "Crecemos con dirección."
+  ];
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setIndex((prev) => (prev + 1) % phrases.length);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="h-10 md:h-12 overflow-hidden relative">
+      <AnimatePresence mode="wait">
+        <motion.p
+          key={index}
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: -20, opacity: 0 }}
+          transition={{ duration: 0.5 }}
+          className="text-lg md:text-2xl font-medium bg-gradient-to-r from-primary-400 to-blue-400 bg-clip-text text-transparent"
+        >
+          {phrases[index]}
+        </motion.p>
+      </AnimatePresence>
+    </div>
+  );
+};
+
 export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [step, setStep] = useState(0); // 0 = Intro, 1-6 = Blocks, 7 = Loading
   const [isLoading, setIsLoading] = useState(false);
@@ -78,25 +101,22 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
 
   const [formData, setFormData] = useState({
     businessName: '',
-    description: '', // What do you do?
+    description: '',
     businessAge: '',
     acquisitionChannels: [] as string[],
     salesFriction: '',
-    clientType: '', // Personas/Negocios
-    clientDefinition: '', // "Personas que quieren..."
+    clientType: '',
+    clientDefinition: '',
     clientPainPoints: [] as string[],
-    whyChosen: [] as string[], // Strength
+    whyChosen: [] as string[],
     antiPersona: [] as string[],
     goals: [] as string[],
     marketingFrustrations: [] as string[],
     links: { instagram: '', facebook: '', tiktok: '', website: '', other: '' }
   });
 
-  // --- HELPERS ---
-
   const handleNext = () => {
-    // Simple validation per step if needed
-    if (step === 1 && (!formData.businessName || !formData.description)) return; // Basic check
+    if (step === 1 && (!formData.businessName || !formData.description)) return;
     setStep(s => s + 1);
     window.scrollTo(0, 0);
   };
@@ -121,16 +141,12 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     });
   };
 
-  // --- SUBMISSION ---
-
   const handleFinalSubmit = async () => {
     setStep(7); // Loading View
     setIsLoading(true);
     setError(null);
 
     try {
-      // Generate Core Message first to have a complete profile
-      // We use the new deep data to inform the core message better
       const strengthString = formData.whyChosen.join(', ') || "Servicio de calidad";
       const problemString = formData.clientPainPoints.join(', ') || "Necesidad general";
       
@@ -144,11 +160,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       const fullProfile: UserProfile = {
         businessName: formData.businessName,
         description: formData.description,
-        offering: formData.description, // Mapped
-        ticket: 'Medium ($50-$500)', // Inferred/Default
-        salesProcess: 'Venta Inmediata', // Inferred/Default
-        
-        // Deep Context
+        offering: formData.description,
+        ticket: 'Medium ($50-$500)',
+        salesProcess: 'Venta Inmediata',
         businessAge: formData.businessAge,
         acquisitionChannels: formData.acquisitionChannels,
         salesFriction: formData.salesFriction,
@@ -161,16 +175,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         antiPersona: formData.antiPersona,
         whyChosen: formData.whyChosen,
         keyStrength: strengthString,
-        
         links: formData.links,
         location: 'Online/Local',
-        executionCapacity: 'Básico', // Can be inferred later
-        postingFrequency: 'Diaria', // Added default
+        executionCapacity: 'Básico',
+        postingFrequency: 'Diaria',
         tone: Tone.PROFESSIONAL,
         isConfigured: true,
         language: 'es',
-
-        // Generated
         coreMessage: coreMessageData.message,
         solvedProblem: formData.clientPainPoints[0] || "Resolver problemas",
       };
@@ -178,47 +189,76 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       onComplete(fullProfile);
     } catch (e: any) {
       console.error(e);
-      // Show explicit error to user
       setError(e.message || "Error de conexión con la IA. Verifica tu API Key.");
-      setStep(6); // Go back if error
+      setStep(6);
       setIsLoading(false);
     }
   };
 
-  // --- RENDER BLOCKS ---
-
-  // BLOCK 0: OPENING EMOTIONAL
+  // --- WELCOME SCREEN (STEP 0) REDESIGN ---
   if (step === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 relative overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-primary-600/5 rounded-full blur-[100px] pointer-events-none"></div>
-        <div className="max-w-md w-full glass-panel p-10 relative z-10 animate-fade-in-blur text-center border-t border-white/10">
-          <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-blue-600 rounded-2xl mx-auto mb-8 flex items-center justify-center shadow-neon rotate-3">
-            <span className="text-white font-bold text-2xl">up</span>
+        {/* Animated BG */}
+        <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_0%,rgba(6,182,212,0.1),transparent_50%)]"></div>
+        
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.7, ease: "easeOut" }}
+          className="max-w-[480px] w-full glass-panel p-8 md:p-12 relative z-10 text-center border-t border-white/20 shadow-2xl"
+        >
+          {/* Logo Glow & Image */}
+          <div className="relative mx-auto mb-8 w-auto flex justify-center">
+            <div className="absolute inset-0 bg-primary-500/20 blur-xl rounded-full opacity-50 animate-pulse-slow"></div>
+            <img src="/logo-light.png" alt="UpGrowth" className="h-10 w-auto relative z-10" />
           </div>
           
-          <h1 className="text-3xl md:text-4xl font-black text-white mb-6 leading-tight">Vamos paso a paso.</h1>
+          <h1 className="text-3xl md:text-4xl font-black text-white mb-2 tracking-tight">Vamos paso a paso.</h1>
           
-          <div className="bg-slate-900/50 p-6 rounded-xl border border-white/5 mb-8 text-left space-y-4">
-             <p className="text-slate-300 font-light flex gap-3 items-start">
-               <span className="text-primary-500 mt-1">✓</span> No necesitas saber marketing.
-             </p>
-             <p className="text-slate-300 font-light flex gap-3 items-start">
-               <span className="text-primary-500 mt-1">✓</span> Esto no es un examen, es una conversación.
-             </p>
+          <div className="mb-8 h-12 flex items-center justify-center">
+             <RotatingText />
           </div>
           
-          <Button onClick={handleNext} className="w-full text-lg shadow-neon py-4">
-            Comenzar
-          </Button>
-          <p className="text-slate-600 text-xs mt-6 leading-relaxed">
-            Responde como puedas. Si algo no sabes, no pasa nada.<br/> UpGrowth completa los espacios.
+          <div className="space-y-4 mb-10 text-left bg-slate-900/50 p-6 rounded-2xl border border-white/5">
+             <div className="flex items-center gap-3 text-slate-300">
+               <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                 <Check className="w-3 h-3 text-emerald-400" />
+               </div>
+               <span className="text-sm font-medium">No necesitas saber marketing</span>
+             </div>
+             <div className="flex items-center gap-3 text-slate-300">
+               <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                 <Check className="w-3 h-3 text-emerald-400" />
+               </div>
+               <span className="text-sm font-medium">Esto no es un examen, es una conversación</span>
+             </div>
+             <div className="flex items-center gap-3 text-slate-300">
+               <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                 <Check className="w-3 h-3 text-emerald-400" />
+               </div>
+               <span className="text-sm font-medium">Se adapta a tu negocio</span>
+             </div>
+          </div>
+          
+          <button 
+            onClick={handleNext}
+            className="w-full h-14 bg-gradient-to-r from-primary-600 to-primary-500 text-white rounded-xl font-bold text-lg shadow-neon hover:shadow-[0_0_30px_rgba(34,211,238,0.4)] hover:scale-[1.02] transition-all flex items-center justify-center gap-2 group"
+          >
+            Empezar mi dirección
+            <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+          </button>
+          
+          <p className="text-slate-500 text-xs mt-6 leading-relaxed">
+            Responde como puedas.<br/>
+            <span className="text-slate-400 font-medium">UpGrowth completa los espacios.</span>
           </p>
-        </div>
+        </motion.div>
       </div>
     );
   }
 
+  // --- EXISTING STEPS (1-6) WITH MINOR TWEAKS ---
   // BLOCK 1: BUSINESS BASICS
   if (step === 1) {
     return (
@@ -270,7 +310,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 2: CURRENT REALITY
+  // ... (Steps 2-5 remain identical to existing logic, just wrapping in StepLayout) ...
   if (step === 2) {
     return (
       <StepLayout 
@@ -302,7 +342,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                  <CheckboxBtn 
                    key={fric} 
                    label={fric} 
-                   selected={formData.salesFriction === fric} // Treating as single select logic visually but using checkbox component for consistency
+                   selected={formData.salesFriction === fric} 
                    onClick={() => setFormData({...formData, salesFriction: fric})}
                  />
                ))}
@@ -313,7 +353,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 3: CLIENT
   if (step === 3) {
     return (
       <StepLayout 
@@ -335,8 +374,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                  />
                ))}
              </div>
-             
-             {/* Dynamic Guided Input */}
              <div className="relative">
                <input 
                  type="text" 
@@ -371,7 +408,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 4: REAL VALUE
   if (step === 4) {
     return (
       <StepLayout 
@@ -414,7 +450,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 5: GOALS & FRUSTRATIONS
   if (step === 5) {
     return (
       <StepLayout 
@@ -456,7 +491,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 6: DIGITAL PRESENCE & CLOSING
+  // BLOCK 6: CLOSING
   if (step === 6) {
     return (
       <StepLayout 
@@ -508,13 +543,15 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // BLOCK 7: LOADING
   if (step === 7) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6">
-         {/* Reuse Loading logic implicitly here or just a simple spinner before App takes over */}
          <div className="text-center space-y-6 animate-pulse">
-            <div className="w-20 h-20 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <div className="relative w-20 h-20 mx-auto">
+               <div className="absolute inset-0 bg-primary-500/20 rounded-full animate-ping"></div>
+               <div className="w-20 h-20 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+               <img src="/icon-blue.png" className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 opacity-80" alt="loading" />
+            </div>
             <h2 className="text-2xl font-bold text-white">Analizando tu negocio...</h2>
             <p className="text-slate-400">El Director IA está revisando tus respuestas.</p>
          </div>
@@ -526,7 +563,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
 };
 
 // --- LAYOUT HELPER ---
-
 const StepLayout: React.FC<{
   title: string;
   children: React.ReactNode;
@@ -542,7 +578,6 @@ const StepLayout: React.FC<{
     <div className="min-h-screen flex flex-col items-center p-4 md:p-8 bg-slate-950">
        <div className="w-full max-w-2xl flex-1 flex flex-col justify-center">
           
-          {/* Progress */}
           <div className="mb-8 flex items-center gap-3">
              <span className="text-primary-500 font-bold text-sm">Paso {step}/{total}</span>
              <div className="h-1 flex-1 bg-slate-900 rounded-full overflow-hidden">
@@ -550,8 +585,11 @@ const StepLayout: React.FC<{
              </div>
           </div>
 
-          {/* Card */}
-          <div className="glass-panel p-6 md:p-10 animate-fade-in-blur relative">
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-panel p-6 md:p-10 relative"
+          >
              <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 leading-tight">{title}</h2>
              {microCopy && <p className="text-slate-500 text-sm mb-6 font-medium">{microCopy}</p>}
              {!microCopy && <div className="mb-8"></div>}
@@ -575,8 +613,7 @@ const StepLayout: React.FC<{
                   {nextLabel || 'Siguiente'}
                 </Button>
              </div>
-          </div>
-
+          </motion.div>
        </div>
     </div>
   );

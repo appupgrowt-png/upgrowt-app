@@ -13,13 +13,15 @@ import { Loading } from './components/ui/Loading';
 import { Button } from './components/ui/Button';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { AuthView } from './components/AuthView';
+import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
 import { saveBusinessProfile, saveStrategySnapshot, loadUserData, saveUserProgress } from './services/business.service';
 import { getSession, signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
 
-type ViewState = 'loading' | 'auth' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency';
+// NEW: Added 'transition' state
+type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency';
 
 export default function MainApp() {
   // Auth State
@@ -58,42 +60,39 @@ export default function MainApp() {
           const data = await loadUserData(currentSession.user.id);
           
           if (data && data.profile) {
+            // Existing user with profile -> Go to App
             setBusinessId(data.businessId);
             setProfile(data.profile);
             if (data.profile.language) setLanguage(data.profile.language);
             
-            // Load Execution State from DB (Priority over local)
-            if (data.executionState && Object.keys(data.executionState).length > 0) {
-              setExecutionState(data.executionState);
-            }
-
-            // Load Weekly Plan from DB
-            if (data.weeklyPlan) {
-              setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
-            }
+            if (data.executionState) setExecutionState(data.executionState);
+            if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
             if (data.strategy) {
               setStrategy(data.strategy);
               setAudit(data.strategy.audit);
               
-              // Router Logic based on loaded data
               if (data.weeklyPlan) {
                 setView('weekly_agency');
               } else {
                 setView('dashboard');
               }
             } else {
-              setView('onboarding'); 
+              // Profile exists but no strategy? Rare edge case, maybe go to report or onboarding
+               setView('onboarding'); 
             }
           } else {
-            setView('onboarding');
+            // User exists but NO profile -> They just logged in for the first time
+            // Trigger Transition first, then Welcome
+            setView('transition');
           }
         } catch (e) {
           console.error("Load Error", e);
-          setView('onboarding');
+          setView('auth'); // Error loading? Re-auth.
         }
       } else {
-        setView('onboarding');
+        // No session -> Auth Screen (Start here)
+        setView('auth');
       }
       setIsLoading(false);
     };
@@ -119,57 +118,46 @@ export default function MainApp() {
   };
 
   const handleOnboardingComplete = (newProfile: UserProfile) => {
+    // When onboarding completes, we SAVE the profile and move to Report
+    // This is different from the old flow which went Onboarding -> Auth -> Report
+    // New flow: Auth -> Transition -> Onboarding -> Report
     setProfile(newProfile);
-    setView('auth'); 
+    handleProfileSave(newProfile);
   };
 
-  const handleAuthSuccess = async (userId: string) => {
-    if (!profile) return;
-    
+  const handleProfileSave = async (profileData: UserProfile) => {
+    if (!session?.user?.id) return;
+
     setIsLoading(true);
     setLoadingMessage('Guardando perfil...');
     
     try {
-      const business = await saveBusinessProfile(userId, profile);
+      const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
-      const sess = await getSession();
-      setSession(sess);
-      setView('report');
+      setView('report'); // Directly to report logic which triggers AI gen
     } catch (e) {
       console.error(e);
       alert("Error al guardar perfil. Intenta de nuevo.");
-      setView('auth');
+      setIsLoading(false);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // --- GENERATION LOGIC ---
-  useEffect(() => {
-    if ((view === 'report' || view === 'dashboard') && profile && !audit && !isLoading && !strategy) {
-      const runGenerationSequence = async () => {
-        const auditResult = await generateAuditStream(profile, language, (text) => setStreamingLog(text));
-        setAudit(auditResult);
-        setStreamingLog('');
-        
-        setIsPlanGenerating(true);
-        try {
-          const planResult = await generateActionPlan(profile, auditResult, language);
-          const fullStrategy: ComprehensiveStrategy = { audit: auditResult, ...planResult };
-          setStrategy(fullStrategy); 
-        } catch (err) {
-          console.error("Plan Error", err);
-        } finally {
-          setIsPlanGenerating(false);
-        }
-      };
-      runGenerationSequence();
-    }
-  }, [view, profile, audit, isLoading, language, strategy]);
+  const handleAuthSuccess = async (userId: string) => {
+    // Auth success -> Go to Transition
+    // Note: session state update happens via initApp usually, but for immediate UI feedback:
+    const currentSession = await getSession();
+    setSession(currentSession);
+    setView('transition');
+  };
+  
+  const handleTransitionComplete = () => {
+    // After transition, go to Welcome Screen (Onboarding Step 0)
+    setView('onboarding');
+  };
 
-
-  // --- VIEW TRANSITIONS ---
-
+  // ... (Other handlers remain the same) ...
   const handleReportContinue = () => {
     if (isPlanGenerating) {
        setIsLoading(true); 
@@ -202,12 +190,9 @@ export default function MainApp() {
     try {
       const plan = await generateWeeklyAgencyPlan(profile, language);
       setWeeklyPlan(plan);
-      
-      // Save newly generated plan to DB immediately
       if (session?.user?.id && businessId) {
         await saveUserProgress(session.user.id, businessId, 'weekly', plan);
       }
-      
       setIsLoading(false);
       setView('weekly_agency');
     } catch (e) {
@@ -226,17 +211,13 @@ export default function MainApp() {
       setAudit(null);
       setExecutionState({});
       setWeeklyPlan(null);
-      setView('onboarding');
+      setView('auth'); // Back to login
     }
   };
-
-  // --- PERSISTENCE HANDLERS (UPDATED) ---
 
   const handleUpdateExecution = (stepIndex: number, data: Record<string, string>) => {
     const newState = { ...executionState, [stepIndex]: data };
     setExecutionState(newState);
-    
-    // Save to DB
     if (session?.user?.id && businessId) {
       saveUserProgress(session.user.id, businessId, 'execution', newState);
     }
@@ -248,8 +229,6 @@ export default function MainApp() {
     newTasks[taskIndex].isCompleted = isCompleted;
     const newPlan = { ...weeklyPlan, dailyPlan: newTasks };
     setWeeklyPlan(newPlan);
-    
-    // Save to DB
     if (session?.user?.id && businessId) {
       saveUserProgress(session.user.id, businessId, 'weekly', newPlan);
     }
@@ -285,35 +264,31 @@ export default function MainApp() {
     );
   }
 
-  // Auth Wall
+  // 1. Auth View (Entry Point)
   if (view === 'auth') {
-    return (
-      <AuthView 
-        initialMode="register" 
-        onSuccess={handleAuthSuccess} 
-        onCancel={() => setView('onboarding')} 
-      />
-    );
+    return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
-  // Onboarding (Guest View)
+  // 2. Transition Screen
+  if (view === 'transition') {
+    return <TransitionScreen onComplete={handleTransitionComplete} />;
+  }
+
+  // 3. Onboarding (Welcome -> Form)
   if (view === 'onboarding') {
     return (
       <>
         <LanguageSwitcher currentLang={language} onToggle={handleLanguageChange} />
-        <div className="relative">
-           <div className="absolute top-6 left-6 z-50">
-             <Button variant="ghost" onClick={() => setView('auth')} className="text-xs">
-               Ya tengo cuenta
-             </Button>
-           </div>
-           <Onboarding onComplete={handleOnboardingComplete} />
+        {/* Logout button in case user is stuck in onboarding loop */}
+        <div className="absolute top-6 left-6 z-50">
+           <button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white">Salir</button>
         </div>
+        <Onboarding onComplete={handleOnboardingComplete} />
       </>
     );
   }
 
-  // Authenticated Views
+  // 4. Main App Views
   if (view === 'report' && profile && audit) {
     return (
       <ConsultancyReport 

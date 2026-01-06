@@ -65,16 +65,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
   return (
     <div className="fixed left-0 top-0 h-full w-64 bg-[#020617]/95 backdrop-blur-xl border-r border-white/5 flex flex-col z-50 hidden md:flex">
       {/* Brand */}
-      <div className="h-24 flex flex-col justify-center px-6 border-b border-white/5">
-        <div className="flex items-center space-x-3 mb-1">
-          <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-lg flex items-center justify-center shadow-neon">
-            <span className="text-white font-bold text-sm">up</span>
-          </div>
-          <h1 className="text-xl font-bold text-white tracking-tight">upGrowt</h1>
+      <div className="h-24 flex flex-col justify-center px-6 border-b border-white/5 relative overflow-hidden">
+        {/* Subtle glow behind logo */}
+        <div className="absolute top-0 left-0 w-32 h-24 bg-primary-500/5 blur-xl"></div>
+        
+        <div className="relative z-10">
+          <img 
+            src="/logo-light.png" 
+            alt="UpGrowth" 
+            className="h-8 w-auto object-contain mb-1" 
+          />
+          <p className="text-[10px] text-primary-400 font-bold tracking-[0.2em] uppercase pl-1 opacity-80">
+            AI Marketing Director
+          </p>
         </div>
-        <p className="text-[10px] text-primary-400 font-bold tracking-[0.2em] uppercase pl-11 opacity-80">
-          AI Marketing Director
-        </p>
       </div>
 
       {/* Menu */}
@@ -134,7 +138,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
                  </div>
                  <div>
                     <span className="text-xs font-bold text-white block">{t('consultant', lang)}</span>
-                    <span className="text-[10px] text-primary-400 flex items-center gap-1">
+                    <span className="text-xs text-primary-400 flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                       Online
                     </span>
