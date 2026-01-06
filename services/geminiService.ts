@@ -15,6 +15,18 @@ const getAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// --- HELPER: ROBUST JSON PARSER ---
+const parseJSON = (text: string) => {
+  try {
+    // Remove Markdown code blocks if present (e.g., ```json ... ```)
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanText);
+  } catch (e) {
+    console.error("Failed to parse JSON:", text);
+    throw new Error("Invalid AI Response Format");
+  }
+};
+
 // --- SCHEMAS ---
 
 const auditSchema: Schema = {
@@ -271,7 +283,7 @@ export const generateAuditStream = async (
         onChunk(fullText); 
       }
     }
-    return JSON.parse(fullText) as BusinessAudit;
+    return parseJSON(fullText) as BusinessAudit;
   } catch (error) {
     console.error("Audit Stream Error:", error);
     throw error;
@@ -314,7 +326,7 @@ export const generateActionPlan = async (
     });
     const text = response.text;
     if (!text) throw new Error("No output");
-    return JSON.parse(text);
+    return parseJSON(text);
   } catch (error) {
     console.error("Action Plan Error:", error);
     throw error;
@@ -381,7 +393,7 @@ export const generateContentSuggestion = async (
     });
     const text = response.text;
     if (!text) throw new Error("No output");
-    return JSON.parse(text);
+    return parseJSON(text);
   } catch (error) {
     console.error("Content Gen Error:", error);
     throw error;
@@ -438,7 +450,7 @@ export const generateCopySuggestion = async (
     });
     const text = response.text;
     if (!text) throw new Error("No output");
-    return JSON.parse(text);
+    return parseJSON(text);
   } catch (error) {
     console.error("Copy Gen Error:", error);
     throw error;
@@ -474,7 +486,7 @@ export const generateFreshTrends = async (
     });
     const text = response.text;
     if (!text) throw new Error("No output");
-    return JSON.parse(text);
+    return parseJSON(text);
   } catch (error) {
     console.error("Trends Gen Error:", error);
     throw error;
@@ -515,7 +527,7 @@ export const generateWeeklyAgencyPlan = async (
     });
     const text = response.text;
     if (!text) throw new Error("No output");
-    const data = JSON.parse(text);
+    const data = parseJSON(text);
     return {
       ...data,
       startDate: new Date().toISOString()
@@ -531,13 +543,13 @@ export const generateCoreMessage = async (businessName: string, audience: string
     const ai = getAI();
     const prompt = `ACT AS: Senior Brand Strategist. TASK: Create Core Message. Business: ${businessName}, Audience: ${audience}, Strength: ${strength}, Problem: ${problem}. Format: 'Ayudamos a...'. Return JSON {message, explanation, usage}.`;
     const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt, config: { responseMimeType: "application/json" } });
-    return JSON.parse(response.text!);
+    return parseJSON(response.text!);
 };
 export const refineCoreMessage = async (currentMessage: string, feedback: string) => {
     const ai = getAI();
     const prompt = `Refine message: ${currentMessage} with feedback: ${feedback}. Return JSON.`;
     const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt, config: { responseMimeType: "application/json" } });
-    return JSON.parse(response.text!);
+    return parseJSON(response.text!);
 };
 export const chatWithConsultant = async (history: ChatMessage[], newMessage: string, profile: UserProfile, strategy: ComprehensiveStrategy, language: Language, executionState?: ExecutionState) => {
     const ai = getAI();

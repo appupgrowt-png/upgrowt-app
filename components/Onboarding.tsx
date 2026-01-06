@@ -74,6 +74,7 @@ const RadioBtn: React.FC<BtnProps> = ({ selected, label, onClick }) => (
 export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [step, setStep] = useState(0); // 0 = Intro, 1-6 = Blocks, 7 = Loading
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     businessName: '',
@@ -125,6 +126,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const handleFinalSubmit = async () => {
     setStep(7); // Loading View
     setIsLoading(true);
+    setError(null);
 
     try {
       // Generate Core Message first to have a complete profile
@@ -174,8 +176,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       };
 
       onComplete(fullProfile);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      // Show explicit error to user
+      setError(e.message || "Error de conexión con la IA. Verifica tu API Key.");
       setStep(6); // Go back if error
       setIsLoading(false);
     }
@@ -487,6 +491,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                 )
              })}
           </div>
+
+          {error && (
+            <div className="p-4 bg-red-900/30 border border-red-500/50 rounded-lg text-red-200 text-sm flex items-center gap-2 animate-pulse">
+              <span>⚠️</span>
+              {error}
+            </div>
+          )}
 
           <div className="mt-8 pt-8 border-t border-white/5 text-center">
              <p className="text-lg text-white font-medium mb-2">Con esto es suficiente.</p>
