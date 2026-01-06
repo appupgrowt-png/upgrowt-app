@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Sidebar } from './components/Sidebar';
@@ -19,6 +18,7 @@ import { saveBusinessProfile, saveStrategySnapshot, loadUserData, saveUserProgre
 import { getSession, signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
+import { supabase } from './lib/supabase';
 
 // NEW: Added 'transition' state
 type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency';
@@ -46,59 +46,87 @@ export default function MainApp() {
 
   // --- INITIALIZATION ---
   useEffect(() => {
-    const initApp = async () => {
+    let mounted = true;
+
+    const loadDataForUser = async (userId: string) => {
+      try {
+        setLoadingMessage('Sincronizando estrategia...');
+        const data = await loadUserData(userId);
+        
+        if (!mounted) return;
+
+        if (data && data.profile) {
+          // Existing user with profile -> Go to App
+          setBusinessId(data.businessId);
+          setProfile(data.profile);
+          if (data.profile.language) setLanguage(data.profile.language);
+          
+          if (data.executionState) setExecutionState(data.executionState);
+          if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
+
+          if (data.strategy) {
+            setStrategy(data.strategy);
+            setAudit(data.strategy.audit);
+            
+            if (data.weeklyPlan) {
+              setView('weekly_agency');
+            } else {
+              setView('dashboard');
+            }
+          } else {
+             setView('onboarding'); 
+          }
+        } else {
+          // User exists but NO profile -> They just logged in for the first time
+          setView('transition');
+        }
+      } catch (e) {
+        console.error("Load Error", e);
+        if (mounted) setView('auth');
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    };
+
+    const initAuth = async () => {
       setIsLoading(true);
       setLoadingMessage('Conectando con UpGrowth...');
       
-      const currentSession = await getSession();
-      setSession(currentSession);
-
-      if (currentSession?.user) {
-        // Load Data from Supabase
-        setLoadingMessage('Sincronizando estrategia...');
-        try {
-          const data = await loadUserData(currentSession.user.id);
-          
-          if (data && data.profile) {
-            // Existing user with profile -> Go to App
-            setBusinessId(data.businessId);
-            setProfile(data.profile);
-            if (data.profile.language) setLanguage(data.profile.language);
-            
-            if (data.executionState) setExecutionState(data.executionState);
-            if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
-
-            if (data.strategy) {
-              setStrategy(data.strategy);
-              setAudit(data.strategy.audit);
-              
-              if (data.weeklyPlan) {
-                setView('weekly_agency');
-              } else {
-                setView('dashboard');
-              }
-            } else {
-              // Profile exists but no strategy? Rare edge case, maybe go to report or onboarding
-               setView('onboarding'); 
-            }
-          } else {
-            // User exists but NO profile -> They just logged in for the first time
-            // Trigger Transition first, then Welcome
-            setView('transition');
-          }
-        } catch (e) {
-          console.error("Load Error", e);
-          setView('auth'); // Error loading? Re-auth.
-        }
+      // 1. Get initial session
+      const { data: { session: initialSession } } = await supabase.auth.getSession();
+      
+      if (initialSession?.user) {
+        setSession(initialSession);
+        await loadDataForUser(initialSession.user.id);
       } else {
-        // No session -> Auth Screen (Start here)
+        setIsLoading(false);
         setView('auth');
       }
-      setIsLoading(false);
+
+      // 2. Listen for Auth Changes (Magic Links / OTP redirects trigger this)
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+        if (event === 'SIGNED_IN' && newSession?.user) {
+          // If we weren't already logged in or session changed
+          if (newSession.user.id !== session?.user?.id) {
+            setSession(newSession);
+            await loadDataForUser(newSession.user.id);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setProfile(null);
+          setView('auth');
+          setIsLoading(false);
+        }
+      });
+
+      return () => {
+        mounted = false;
+        subscription.unsubscribe();
+      };
     };
 
-    initApp();
-  }, []);
+    initAuth();
+  }, []); // Empty dependency array to run once on mount
 
   // --- SAVE STRATEGY SIDE EFFECT ---
   useEffect(() => {
@@ -119,8 +147,6 @@ export default function MainApp() {
 
   const handleOnboardingComplete = (newProfile: UserProfile) => {
     // When onboarding completes, we SAVE the profile and move to Report
-    // This is different from the old flow which went Onboarding -> Auth -> Report
-    // New flow: Auth -> Transition -> Onboarding -> Report
     setProfile(newProfile);
     handleProfileSave(newProfile);
   };
@@ -146,7 +172,8 @@ export default function MainApp() {
 
   const handleAuthSuccess = async (userId: string) => {
     // Auth success -> Go to Transition
-    // Note: session state update happens via initApp usually, but for immediate UI feedback:
+    // Note: The onAuthStateChange listener will usually catch this too, 
+    // but explicit handling ensures UI responsiveness if already loaded.
     const currentSession = await getSession();
     setSession(currentSession);
     setView('transition');
