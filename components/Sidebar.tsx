@@ -63,22 +63,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
   const isContentUnlocked = currentPhaseIndex >= 2; 
 
   return (
-    <div className="fixed left-0 top-0 h-full w-72 bg-[#020617] border-r border-white/5 flex flex-col z-50 hidden md:flex shadow-2xl">
+    <div className="fixed left-0 top-0 h-full w-72 bg-[#020617] border-r border-white/5 flex flex-col z-50 hidden md:flex shadow-2xl relative overflow-hidden">
+      
+      {/* Background Ambience for Sidebar */}
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
+         <div className="absolute top-[-100px] left-[-50px] w-[300px] h-[300px] bg-primary-600/10 rounded-full blur-[80px]"></div>
+         <div className="absolute bottom-0 right-0 w-[200px] h-[200px] bg-blue-600/5 rounded-full blur-[60px]"></div>
+      </div>
+
       {/* Brand Header */}
-      <div className="h-32 flex flex-col justify-center px-8 border-b border-white/5 relative overflow-hidden shrink-0">
-        {/* Spotlights */}
-        <div className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-40 h-40 bg-primary-500/10 rounded-full blur-[50px] pointer-events-none"></div>
-        <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full blur-[40px] pointer-events-none"></div>
+      <div className="h-40 flex flex-col justify-center px-8 border-b border-white/5 relative shrink-0 z-10">
         
-        <div className="relative z-10 flex flex-col items-start gap-3">
-          <img 
-            src="/logo-light.png" 
-            alt="UpGrowth" 
-            className="h-9 w-auto object-contain" 
-          />
-          <div className="px-2 py-1 rounded bg-gradient-to-r from-slate-800 to-slate-900 border border-white/10 backdrop-blur-md">
-            <p className="text-[10px] text-primary-300 font-bold tracking-[0.15em] uppercase flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
+        <div className="relative z-10 flex flex-col items-start gap-4">
+          {/* Logo with Glow Effect */}
+          <div className="relative">
+             <div className="absolute inset-0 bg-primary-400/20 blur-xl rounded-full opacity-0 hover:opacity-100 transition-opacity duration-500"></div>
+             <img 
+               src="/logo-light.png" 
+               alt="UpGrowth" 
+               className="h-12 w-auto object-contain drop-shadow-[0_0_15px_rgba(34,211,238,0.2)]" 
+             />
+          </div>
+          
+          <div className="px-3 py-1.5 rounded-lg bg-slate-900/80 border border-white/10 backdrop-blur-md shadow-lg flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-500"></span>
+            </span>
+            <p className="text-[10px] text-primary-200 font-bold tracking-[0.2em] uppercase">
               AI Director
             </p>
           </div>
@@ -86,7 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
       </div>
 
       {/* Menu */}
-      <div className="flex-1 py-8 px-5 space-y-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
+      <div className="flex-1 py-8 px-5 space-y-1 overflow-y-auto overflow-x-hidden custom-scrollbar z-10">
         <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest px-4 mb-3 opacity-80">{t('direction', lang)}</div>
         
         <MenuButton 
@@ -155,7 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
       </div>
 
       {/* Footer */}
-      <div className="p-5 border-t border-white/5 space-y-1 bg-[#020617]">
+      <div className="p-5 border-t border-white/5 space-y-1 bg-[#020617] relative z-10">
         <MenuButton 
           label={t('settings', lang)} 
           onClick={onSettings}

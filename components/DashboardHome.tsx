@@ -29,7 +29,7 @@ const WeeklyInsights: React.FC<{ audit: any, lang: Language }> = ({ audit, lang 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in mb-8 mt-8">
        {/* Strength */}
-       <div className="bg-emerald-900/10 border border-emerald-500/20 p-6 rounded-xl h-full flex flex-col">
+       <div className="bg-emerald-900/10 border border-emerald-500/20 p-6 rounded-xl h-full flex flex-col hover:border-emerald-500/40 transition-colors">
           <div className="flex items-center gap-2 mb-3">
              <span className="text-emerald-400 font-bold text-lg">✔</span>
              <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-widest">{t('feedback_good', lang)}</h4>
@@ -38,7 +38,7 @@ const WeeklyInsights: React.FC<{ audit: any, lang: Language }> = ({ audit, lang 
        </div>
 
        {/* Limiting */}
-       <div className="bg-orange-900/10 border border-orange-500/20 p-6 rounded-xl h-full flex flex-col">
+       <div className="bg-orange-900/10 border border-orange-500/20 p-6 rounded-xl h-full flex flex-col hover:border-orange-500/40 transition-colors">
           <div className="flex items-center gap-2 mb-3">
              <span className="text-orange-400 font-bold text-lg">⚠️</span>
              <h4 className="text-xs font-bold text-orange-400 uppercase tracking-widest">{t('feedback_bad', lang)}</h4>
@@ -47,7 +47,7 @@ const WeeklyInsights: React.FC<{ audit: any, lang: Language }> = ({ audit, lang 
        </div>
 
        {/* Opportunity */}
-       <div className="bg-primary-900/10 border border-primary-500/20 p-6 rounded-xl h-full flex flex-col">
+       <div className="bg-primary-900/10 border border-primary-500/20 p-6 rounded-xl h-full flex flex-col hover:border-primary-500/40 transition-colors">
           <div className="flex items-center gap-2 mb-3">
              <span className="text-primary-400 font-bold text-lg">🚀</span>
              <h4 className="text-xs font-bold text-primary-400 uppercase tracking-widest">{t('feedback_opp', lang)}</h4>
@@ -533,7 +533,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     return (
       <>
         {parts[0]}
-        <span className="bg-gradient-to-r from-cyan-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent animate-pulse-slow inline-block transform hover:scale-105 transition-transform duration-300">
+        <span className="font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)] text-4xl md:text-5xl inline-block px-1 transform hover:scale-105 transition-transform duration-300">
           {highlightedWord}
         </span>
         {parts[1]}
@@ -542,15 +542,21 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   };
 
   return (
-    <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mx-auto space-y-8 animate-fade-in pb-20 px-4 md:px-6">
+    <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mx-auto space-y-8 animate-fade-in pb-20 px-4 md:px-6 relative">
       
+      {/* Ambient Background Lights for Dashboard */}
+      <div className="absolute top-0 left-0 w-full h-[500px] pointer-events-none -z-10 overflow-hidden">
+        <div className="absolute top-[-50px] left-[-50px] w-[600px] h-[600px] bg-primary-900/10 rounded-full blur-[120px]"></div>
+        <div className="absolute top-20 right-20 w-[400px] h-[400px] bg-blue-900/10 rounded-full blur-[100px]"></div>
+      </div>
+
       {/* Header - Weekly Direction Ritual */}
       <div className="relative border-b border-white/5 pb-8 mb-8">
         <div className="flex flex-col md:flex-row justify-between items-end gap-6">
-          <div className="space-y-4 max-w-4xl">
+          <div className="space-y-4 max-w-4xl relative z-10">
              {/* Eyebrow Label with Business Name */}
              <div className="flex items-center gap-2.5">
-               <div className="w-5 h-5 rounded-full bg-cyan-900/30 border border-cyan-500/30 flex items-center justify-center">
+               <div className="w-5 h-5 rounded-full bg-cyan-900/30 border border-cyan-500/30 flex items-center justify-center shadow-[0_0_10px_rgba(6,182,212,0.3)]">
                   <svg className="w-3 h-3 text-cyan-400 animate-[spin_4s_linear_infinite]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                </div>
                <span className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase">
@@ -560,22 +566,17 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                </span>
              </div>
              
-             {/* Main Hero Text with Business Name Gradient */}
-             <h1 className="text-3xl md:text-4xl lg:text-5xl font-black text-white leading-[1.15] tracking-tight">
-               <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mr-2">
-                 {businessName},
-               </span>
-               <span className="text-white">
-                 "{renderHeroText()}"
-               </span>
+             {/* Main Hero Text - REMOVED REDUNDANT BUSINESS NAME */}
+             <h1 className="text-3xl md:text-4xl lg:text-5xl font-black text-white leading-[1.2] tracking-tight">
+               "{renderHeroText()}"
              </h1>
           </div>
           
           <button 
             onClick={() => setIsCheckinOpen(true)} 
-            className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-slate-900/50 border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-900/10 transition-all duration-300"
+            className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-slate-900/50 border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-900/10 transition-all duration-300 backdrop-blur-md"
           >
-            <span className="w-2 h-2 rounded-full bg-slate-500 group-hover:bg-cyan-400 transition-colors"></span>
+            <span className="w-2 h-2 rounded-full bg-slate-500 group-hover:bg-cyan-400 transition-colors shadow-[0_0_8px_rgba(34,211,238,0.5)]"></span>
             <span className="text-xs font-bold text-slate-400 group-hover:text-cyan-100 uppercase tracking-wide">
               {t('weekly_ritual', lang)}
             </span>
@@ -583,7 +584,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start relative z-10">
          
          {/* Main Hero Section - Takes 8 cols on LG, 9 on XL */}
          <div className="lg:col-span-8 xl:col-span-9">
