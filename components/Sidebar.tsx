@@ -8,7 +8,7 @@ interface SidebarProps {
   activeView?: string;
   onNavigate?: (action: string) => void;
   lang: Language;
-  currentPhaseIndex?: number; // 0: Fundamentos, 1: Conversion, etc.
+  currentPhaseIndex?: number; 
 }
 
 const MenuButton: React.FC<{ 
@@ -42,7 +42,6 @@ const MenuButton: React.FC<{
       </div>
     )}
 
-    {/* Hover Tooltip for Locked Items */}
     {locked && (
       <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 w-48 bg-slate-800 text-xs text-slate-300 p-3 rounded-lg border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl backdrop-blur-md">
         {t('locked_tooltip', lang)}
@@ -53,39 +52,33 @@ const MenuButton: React.FC<{
 
 export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeView = 'dashboard', onNavigate, lang, currentPhaseIndex = 0 }) => {
   
-  // Logic: 
-  // Phase 0: Fundamentos (Only Dashboard, Roadmap, Action Plan)
-  // Phase 1: Conversion (Same)
-  // Phase 2: Contenidos (Unlocks Content & Trends)
-  // Phase 3: Scaling
-  
-  // Note: Array index 0 is Phase 1, Index 1 is Phase 2, Index 2 is Phase 3.
   const isContentUnlocked = currentPhaseIndex >= 2; 
 
   return (
     <div className="fixed left-0 top-0 h-full w-72 bg-[#020617] border-r border-white/5 flex flex-col z-50 hidden md:flex shadow-2xl relative overflow-hidden">
       
-      {/* Background Ambience for Sidebar */}
+      {/* Background Ambience for Sidebar - INTENSIFIED */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
-         <div className="absolute top-[-100px] left-[-50px] w-[300px] h-[300px] bg-primary-600/10 rounded-full blur-[80px]"></div>
+         <div className="absolute top-[-50px] left-[-50px] w-[350px] h-[350px] bg-primary-600/10 rounded-full blur-[100px]"></div>
          <div className="absolute bottom-0 right-0 w-[200px] h-[200px] bg-blue-600/5 rounded-full blur-[60px]"></div>
       </div>
 
       {/* Brand Header */}
-      <div className="h-40 flex flex-col justify-center px-8 border-b border-white/5 relative shrink-0 z-10">
+      <div className="h-48 flex flex-col justify-center px-6 border-b border-white/5 relative shrink-0 z-10">
         
-        <div className="relative z-10 flex flex-col items-start gap-4">
-          {/* Logo with Glow Effect */}
-          <div className="relative">
-             <div className="absolute inset-0 bg-primary-400/20 blur-xl rounded-full opacity-0 hover:opacity-100 transition-opacity duration-500"></div>
+        <div className="relative z-10 flex flex-col items-center gap-6">
+          {/* Logo with STRONG Glow Effect & Larger Size */}
+          <div className="relative w-full flex justify-center">
+             {/* Intense backlight for logo */}
+             <div className="absolute inset-0 bg-primary-400/30 blur-[40px] rounded-full opacity-60"></div>
              <img 
                src="/logo-light.png" 
                alt="UpGrowth" 
-               className="h-12 w-auto object-contain drop-shadow-[0_0_15px_rgba(34,211,238,0.2)]" 
+               className="h-20 w-auto object-contain relative z-10 drop-shadow-[0_0_25px_rgba(34,211,238,0.5)]" 
              />
           </div>
           
-          <div className="px-3 py-1.5 rounded-lg bg-slate-900/80 border border-white/10 backdrop-blur-md shadow-lg flex items-center gap-2">
+          <div className="px-4 py-1.5 rounded-full bg-slate-900/80 border border-white/10 backdrop-blur-md shadow-lg flex items-center gap-2">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-500"></span>
@@ -143,7 +136,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>} 
         />
 
-        {/* AI Consultant Float */}
         <div className="mt-8 px-1">
            <div 
              className="bg-gradient-to-b from-slate-800/50 to-slate-900 border border-white/5 rounded-xl p-4 relative overflow-hidden group cursor-pointer hover:border-primary-500/30 transition-all hover:shadow-[0_0_20px_rgba(34,211,238,0.1)]"

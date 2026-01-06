@@ -20,7 +20,6 @@ import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionS
 import { t } from './utils/i18n';
 import { supabase } from './lib/supabase';
 
-// NEW: Added 'transition' state
 type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'error';
 
 export default function MainApp() {
@@ -68,11 +67,11 @@ export default function MainApp() {
           if (data.executionState) setExecutionState(data.executionState);
           if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
+          // CRITICAL: Force dashboard if strategy exists to prevent onboarding redirect
           if (data.strategy) {
             setStrategy(data.strategy);
             setAudit(data.strategy.audit);
             
-            // LOGIC: If they have a weekly plan, go there. If not, Dashboard.
             if (data.weeklyPlan) {
               setView('weekly_agency');
             } else {
@@ -80,7 +79,6 @@ export default function MainApp() {
             }
           } else {
              // Profile exists, but Strategy missing. 
-             // Triggers auto-recovery instead of sending to onboarding form.
              console.log("Profile found, recovering strategy...");
              setShouldRecoverStrategy(true);
           }
@@ -91,7 +89,6 @@ export default function MainApp() {
       } catch (e: any) {
         console.error("Load Error", e);
         if (mounted) {
-           // If error implies missing columns or DB issues, show error view
            if (e.message?.includes('column') || e.code === '42703') {
              setAppError("Error de Base de Datos: Faltan columnas necesarias. Por favor ejecuta el script SQL de migración en Supabase.");
              setView('error');
@@ -119,20 +116,15 @@ export default function MainApp() {
         setView('auth');
       }
 
-      // 2. Listen for Auth Changes (Magic Links / OTP redirects trigger this)
+      // 2. Listen for Auth Changes
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
         if (event === 'SIGNED_IN' && newSession?.user) {
-          // If we weren't already logged in or session changed
           if (newSession.user.id !== session?.user?.id) {
             setSession(newSession);
             await loadDataForUser(newSession.user.id);
           }
-        } else if (event === 'SIGNED_OUT') {
-          setSession(null);
-          setProfile(null);
-          setView('auth');
-          setIsLoading(false);
-        }
+        } 
+        // Note: SIGNED_OUT handling moved to explicit logout button to avoid race conditions
       });
 
       return () => {
@@ -142,10 +134,11 @@ export default function MainApp() {
     };
 
     initAuth();
-  }, []); // Empty dependency array to run once on mount
+  }, []); 
 
   // --- SAVE STRATEGY SIDE EFFECT ---
   useEffect(() => {
+    // Ensuring data persists whenever we have a valid strategy loaded/generated
     if (session && businessId && profile && strategy && !isLoading) {
        saveStrategySnapshot(businessId, profile, strategy).catch(console.error);
     }
@@ -170,7 +163,6 @@ export default function MainApp() {
   };
 
   const handleOnboardingComplete = (newProfile: UserProfile) => {
-    // When onboarding completes, we SAVE the profile and move to Report
     setProfile(newProfile);
     handleProfileSave(newProfile);
   };
@@ -186,62 +178,52 @@ export default function MainApp() {
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
 
-      // 2. Generate Audit immediately (Streaming)
+      // 2. Generate Audit
       setLoadingMessage('El Director IA está analizando tu negocio...');
-      
       const generatedAudit = await generateAuditStream(profileData, language, (text) => {
         setStreamingLog(text);
       });
       
       setAudit(generatedAudit);
-      setStreamingLog(''); // Clear stream log after audit
+      setStreamingLog(''); 
       
-      // 3. Start generating full Strategy in background
+      // 3. Start generating Strategy
       setIsPlanGenerating(true);
       generateActionPlan(profileData, generatedAudit, language)
         .then(plan => {
-          // Merge plan with audit to create full strategy
           setStrategy({ ...plan, audit: generatedAudit });
           setIsPlanGenerating(false);
+          // Auto-save happens via useEffect, but let's double check to be safe for reload
+          saveStrategySnapshot(business.id, profileData, { ...plan, audit: generatedAudit });
         })
         .catch(err => {
           console.error("Background Strategy Gen Error", err);
           setIsPlanGenerating(false);
         });
 
-      // 4. Move to Report View (Now that we have audit)
       setView('report'); 
       
     } catch (e: any) {
       console.error(e);
-      if (e.message?.includes('column')) {
-         setAppError("Error de DB: Faltan columnas. Ejecuta el SQL de migración.");
-         setView('error');
-      } else {
-         alert("Ocurrió un error al generar tu diagnóstico. Por favor intenta de nuevo.");
-         setView('onboarding'); // Fallback so user can retry
-      }
+      setView('onboarding');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleAuthSuccess = async (userId: string) => {
-    // Auth success -> Go to Transition
     const currentSession = await getSession();
     setSession(currentSession);
     setView('transition');
   };
   
   const handleTransitionComplete = () => {
-    // After transition, go to Welcome Screen (Onboarding Step 0)
     setView('onboarding');
   };
 
   const handleReportContinue = () => {
     if (isPlanGenerating) {
        setIsLoading(true); 
-       // Polling to wait for strategy generation to finish
        const checkInterval = setInterval(() => {
           setStrategy(prev => {
             if (prev) {
@@ -250,11 +232,10 @@ export default function MainApp() {
               setView('roadmap');
               return prev;
             }
-            return null; // Keep waiting if null
+            return null;
           });
        }, 500);
     } else {
-       // Check if strategy exists before moving, otherwise error
        if (strategy) {
          setView('roadmap');
        } else {
@@ -291,13 +272,8 @@ export default function MainApp() {
   const handleLogout = async () => {
     if(confirm("¿Estás seguro de cerrar sesión?")) {
       await signOut();
-      setSession(null);
-      setProfile(null);
-      setStrategy(null);
-      setAudit(null);
-      setExecutionState({});
-      setWeeklyPlan(null);
-      setView('auth'); // Back to login
+      // FORCE RELOAD to clear all state and prevent artifacts
+      window.location.href = '/'; 
     }
   };
 
@@ -363,22 +339,18 @@ export default function MainApp() {
     );
   }
 
-  // 1. Auth View (Entry Point)
   if (view === 'auth') {
     return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
-  // 2. Transition Screen
   if (view === 'transition') {
     return <TransitionScreen onComplete={handleTransitionComplete} />;
   }
 
-  // 3. Onboarding (Welcome -> Form)
   if (view === 'onboarding') {
     return (
       <>
         <LanguageSwitcher currentLang={language} onToggle={handleLanguageChange} />
-        {/* Logout button in case user is stuck in onboarding loop */}
         <div className="absolute top-6 left-6 z-50">
            <button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white">Salir</button>
         </div>
@@ -387,7 +359,6 @@ export default function MainApp() {
     );
   }
 
-  // 4. Main App Views
   if (view === 'report' && profile && audit) {
     return (
       <ConsultancyReport 
@@ -399,11 +370,14 @@ export default function MainApp() {
     );
   }
 
+  // --- CENTRAL ALIGNMENT FIX FOR MAIN APP VIEWS ---
+  // The outer main container now uses flex-col items-center to center the content hierarchically
+  
   if (view === 'roadmap' && strategy && profile) {
     return (
       <div className="min-h-screen bg-slate-950 flex">
         <Sidebar onLogout={handleLogout} onSettings={() => setView('pricing')} activeView={view} onNavigate={handleSidebarClick} lang={language} currentPhaseIndex={getCurrentPhaseIndex()} />
-        <main className="flex-1 md:ml-64 relative overflow-x-hidden">
+        <main className="flex-1 md:ml-64 relative min-h-screen flex flex-col items-center bg-slate-950">
            <RoadmapView phases={strategy.roadmap} profile={profile} lang={language} onStartPriority={handleStartPriority} />
         </main>
       </div>
@@ -420,8 +394,11 @@ export default function MainApp() {
     return (
       <div className="min-h-screen bg-slate-950 flex">
         <Sidebar onLogout={handleLogout} onSettings={() => setView('pricing')} activeView={view} onNavigate={handleSidebarClick} lang={language} currentPhaseIndex={getCurrentPhaseIndex()} />
-        <main className="flex-1 md:ml-64 p-4 md:p-8 relative">
-           <div className="md:hidden flex justify-between mb-6 mt-12"><span className="text-white font-bold">upGrowt</span><button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button></div>
+        <main className="flex-1 md:ml-64 p-4 md:p-8 relative min-h-screen flex flex-col items-center bg-slate-950">
+           <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mb-6 mt-12 md:mt-0 md:hidden flex justify-between">
+              <span className="text-white font-bold">upGrowt</span>
+              <button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button>
+           </div>
            <WeeklyAgencyDashboard plan={weeklyPlan} profile={profile} lang={language} onUpdateTask={handleUpdateWeeklyTask} strategy={strategy} />
         </main>
       </div>
@@ -432,8 +409,11 @@ export default function MainApp() {
     return (
       <div className="min-h-screen bg-slate-950 flex">
         <Sidebar onLogout={handleLogout} onSettings={() => setView('pricing')} activeView={view} onNavigate={handleSidebarClick} lang={language} currentPhaseIndex={getCurrentPhaseIndex()} />
-        <main className="flex-1 md:ml-64 p-4 md:p-8 relative">
-           <div className="md:hidden flex justify-between mb-6 mt-12"><span className="text-white font-bold">upGrowt</span><button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button></div>
+        <main className="flex-1 md:ml-64 p-4 md:p-8 relative min-h-screen flex flex-col items-center bg-slate-950">
+           <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mb-6 mt-12 md:mt-0 md:hidden flex justify-between">
+              <span className="text-white font-bold">upGrowt</span>
+              <button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button>
+           </div>
            <DashboardHome strategy={strategy} profile={profile} businessName={profile.businessName} onCompletePriority={handleCompletePriority} activeSidebarAction={sidebarAction} lang={language} onUpdateExecution={handleUpdateExecution} savedExecutionState={executionState} />
         </main>
       </div>
