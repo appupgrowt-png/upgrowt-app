@@ -158,13 +158,40 @@ export default function MainApp() {
     setLoadingMessage('Guardando perfil...');
     
     try {
+      // 1. Save profile to DB
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
-      setView('report'); // Directly to report logic which triggers AI gen
+
+      // 2. Generate Audit immediately (Streaming)
+      setLoadingMessage('El Director IA está analizando tu negocio...');
+      
+      const generatedAudit = await generateAuditStream(profileData, language, (text) => {
+        setStreamingLog(text);
+      });
+      
+      setAudit(generatedAudit);
+      setStreamingLog(''); // Clear stream log after audit
+      
+      // 3. Start generating full Strategy in background
+      setIsPlanGenerating(true);
+      generateActionPlan(profileData, generatedAudit, language)
+        .then(plan => {
+          // Merge plan with audit to create full strategy
+          setStrategy({ ...plan, audit: generatedAudit });
+          setIsPlanGenerating(false);
+        })
+        .catch(err => {
+          console.error("Background Strategy Gen Error", err);
+          setIsPlanGenerating(false);
+        });
+
+      // 4. Move to Report View (Now that we have audit)
+      setView('report'); 
+      
     } catch (e) {
       console.error(e);
-      alert("Error al guardar perfil. Intenta de nuevo.");
-      setIsLoading(false);
+      alert("Ocurrió un error al generar tu diagnóstico. Por favor intenta de nuevo.");
+      setView('onboarding'); // Fallback so user can retry
     } finally {
       setIsLoading(false);
     }
@@ -172,8 +199,6 @@ export default function MainApp() {
 
   const handleAuthSuccess = async (userId: string) => {
     // Auth success -> Go to Transition
-    // Note: The onAuthStateChange listener will usually catch this too, 
-    // but explicit handling ensures UI responsiveness if already loaded.
     const currentSession = await getSession();
     setSession(currentSession);
     setView('transition');
@@ -184,10 +209,10 @@ export default function MainApp() {
     setView('onboarding');
   };
 
-  // ... (Other handlers remain the same) ...
   const handleReportContinue = () => {
     if (isPlanGenerating) {
        setIsLoading(true); 
+       // Polling to wait for strategy generation to finish
        const checkInterval = setInterval(() => {
           setStrategy(prev => {
             if (prev) {
@@ -196,11 +221,16 @@ export default function MainApp() {
               setView('roadmap');
               return prev;
             }
-            return null;
+            return null; // Keep waiting if null
           });
        }, 500);
     } else {
-       setView('roadmap');
+       // Check if strategy exists before moving, otherwise error
+       if (strategy) {
+         setView('roadmap');
+       } else {
+         alert("La estrategia aún no se ha generado por completo. Espera unos segundos.");
+       }
     }
   };
 
