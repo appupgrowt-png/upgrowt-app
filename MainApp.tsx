@@ -15,7 +15,7 @@ import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
 import { saveBusinessProfile, saveStrategySnapshot, loadUserData, saveUserProgress } from './services/business.service';
-import { getSession, signOut } from './services/auth.service';
+import { signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
 import { supabase } from './lib/supabase';
@@ -36,9 +36,10 @@ export default function MainApp() {
   
   // UI State
   const [isLoading, setIsLoading] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState<string>('');
+  const [loadingMessage, setLoadingMessage] = useState<string>('Iniciando sistema...');
   const [streamingLog, setStreamingLog] = useState<string>('');
   const [isPlanGenerating, setIsPlanGenerating] = useState(false);
+  const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
   const [view, setView] = useState<ViewState>('loading');
   const [sidebarAction, setSidebarAction] = useState<string>('');
   const [language, setLanguage] = useState<Language>('es');
@@ -47,20 +48,32 @@ export default function MainApp() {
   // Recovery State
   const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
 
-  // --- INITIALIZATION ---
+  // --- AUTO NAVIGATE WHEN STRATEGY IS READY ---
+  useEffect(() => {
+    if (isWaitingForStrategy && strategy) {
+      setIsWaitingForStrategy(false);
+      setView('roadmap');
+    }
+  }, [strategy, isWaitingForStrategy]);
+
+  // --- CORE AUTHENTICATION & ROUTING LOGIC ---
   useEffect(() => {
     let mounted = true;
 
-    const loadDataForUser = async (userId: string) => {
-      let recover = false;
+    // Función centralizada para cargar datos y decidir la vista
+    const handleSessionFound = async (currentSession: any) => {
       try {
-        setLoadingMessage('Sincronizando estrategia...');
-        const data = await loadUserData(userId);
+        setSession(currentSession);
+        setLoadingMessage('Sincronizando perfil...');
+        
+        // Cargar datos de negocio
+        const data = await loadUserData(currentSession.user.id);
         
         if (!mounted) return;
 
         if (data && data.profile) {
-          // --- EXISTING USER LOGIC ---
+          // CASO 1: USUARIO EXISTENTE (Tiene perfil)
+          console.log("User found, restoring state...");
           setBusinessId(data.businessId);
           setProfile(data.profile);
           if (data.profile.language) setLanguage(data.profile.language);
@@ -69,76 +82,79 @@ export default function MainApp() {
           if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
           if (data.strategy) {
-            // FULLY ONBOARDED
+            // USUARIO COMPLETO (Perfil + Estrategia)
             setStrategy(data.strategy);
             setAudit(data.strategy.audit);
             
+            // Decidir vista inicial basada en progreso
             if (data.weeklyPlan) {
               setView('weekly_agency');
             } else {
               setView('dashboard');
             }
           } else {
-             // PROFILE EXISTS BUT NO STRATEGY (Incomplete flow or error)
-             // CRITICAL FIX: Do NOT redirect to onboarding. Recover state.
-             console.log("Profile found, recovering strategy...");
+             // ESTADO INCONSISTENTE (Perfil existe, pero Estrategia no)
+             // Intentar recuperación, NO mandar a onboarding
+             console.warn("Profile exists but strategy missing. Attempting recovery.");
              setShouldRecoverStrategy(true);
-             recover = true;
-             // Keep view in loading or move to report to prevent onboarding flash
+             // Mantener en loading o report mientras se recupera
           }
         } else {
-          // --- NEW USER LOGIC ---
-          // Only show onboarding if NO profile exists in DB
-          setView('transition');
+          // CASO 2: USUARIO NUEVO (Sin perfil en DB)
+          console.log("New user detected. Starting Onboarding.");
+          setView('transition'); // Lleva al onboarding
         }
-      } catch (e: any) {
-        console.error("Load Error", e);
+      } catch (err) {
+        console.error("Critical Data Load Error:", err);
         if (mounted) {
-           if (e.message?.includes('column') || e.code === '42703') {
-             setAppError("Error de Base de Datos: Faltan columnas necesarias. Contacte soporte.");
-             setView('error');
-           } else {
-             setView('auth');
-           }
+           setAppError("Error cargando tus datos. Por favor refresca.");
+           setView('error');
         }
       } finally {
-        if (mounted && !recover) setIsLoading(false);
+        if (mounted) setIsLoading(false);
       }
     };
 
-    const initAuth = async () => {
-      setIsLoading(true);
-      setLoadingMessage('Conectando con UpGrowth...');
+    // 1. Inicializar Listener de Supabase
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      console.log("Auth Event:", event);
       
-      const { data: { session: initialSession } } = await supabase.auth.getSession();
-      
-      if (initialSession?.user) {
-        setSession(initialSession);
-        await loadDataForUser(initialSession.user.id);
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (newSession) {
+           // Solo recargar si no tenemos sesión o si cambió el usuario
+           // Esto evita recargas innecesarias, pero asegura hidratación en F5
+           handleSessionFound(newSession);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setProfile(null);
+        setStrategy(null);
+        setView('auth');
+        setIsLoading(false);
+      } else if (event === 'INITIAL_SESSION') {
+         // Manejado por getSession abajo, pero útil para debug
+         if (!newSession) {
+            setView('auth');
+            setIsLoading(false);
+         }
+      }
+    });
+
+    // 2. Chequeo inicial imperativo (para F5/Reload)
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (initialSession) {
+        handleSessionFound(initialSession);
       } else {
+        // Si no hay sesión inicial, mostramos login
         setIsLoading(false);
         setView('auth');
       }
+    });
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
-        if (event === 'SIGNED_IN' && newSession?.user) {
-          if (newSession.user.id !== session?.user?.id) {
-            setSession(newSession);
-            await loadDataForUser(newSession.user.id);
-          }
-        } else if (event === 'SIGNED_OUT') {
-            setSession(null);
-            setView('auth');
-        }
-      });
-
-      return () => {
-        mounted = false;
-        subscription.unsubscribe();
-      };
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
     };
-
-    initAuth();
   }, []); 
 
   // --- SAVE STRATEGY SNAPSHOT ---
@@ -169,6 +185,19 @@ export default function MainApp() {
     handleProfileSave(newProfile);
   };
 
+  const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
+    setIsPlanGenerating(true);
+    try {
+      const plan = await generateActionPlan(profileData, auditData, language);
+      const fullStrategy = { ...plan, audit: auditData };
+      setStrategy(fullStrategy);
+    } catch (err) {
+      console.error("Strategy Gen Error", err);
+    } finally {
+      setIsPlanGenerating(false);
+    }
+  };
+
   const handleProfileSave = async (profileData: UserProfile) => {
     if (!session?.user?.id) return;
 
@@ -187,23 +216,13 @@ export default function MainApp() {
       setAudit(generatedAudit);
       setStreamingLog(''); 
       
-      setIsPlanGenerating(true);
-      generateActionPlan(profileData, generatedAudit, language)
-        .then(plan => {
-          setStrategy({ ...plan, audit: generatedAudit });
-          setIsPlanGenerating(false);
-          saveStrategySnapshot(business.id, profileData, { ...plan, audit: generatedAudit });
-        })
-        .catch(err => {
-          console.error("Strategy Gen Error", err);
-          setIsPlanGenerating(false);
-        });
+      triggerStrategyGeneration(profileData, generatedAudit, business.id);
 
       setView('report'); 
       
     } catch (e: any) {
       console.error(e);
-      // Only go back to onboarding if save failed completely
+      // Solo volver a onboarding si falló la creación del negocio crítico
       if (!businessId) setView('onboarding');
     } finally {
       setIsLoading(false);
@@ -211,9 +230,9 @@ export default function MainApp() {
   };
 
   const handleAuthSuccess = async (userId: string) => {
-    const currentSession = await getSession();
-    setSession(currentSession);
-    // Let the useEffect load data, don't force transition yet
+    // No hacemos nada manual aquí, el onAuthStateChange detectará el SIGNED_IN
+    setIsLoading(true);
+    setLoadingMessage('Verificando credenciales...');
   };
   
   const handleTransitionComplete = () => {
@@ -221,25 +240,13 @@ export default function MainApp() {
   };
 
   const handleReportContinue = () => {
-    if (isPlanGenerating) {
-       setIsLoading(true); 
-       const checkInterval = setInterval(() => {
-          setStrategy(prev => {
-            if (prev) {
-              clearInterval(checkInterval);
-              setIsLoading(false);
-              setView('roadmap');
-              return prev;
-            }
-            return null;
-          });
-       }, 500);
-    } else {
-       if (strategy) {
-         setView('roadmap');
-       } else {
-         alert("La estrategia aún se está generando. Por favor espera.");
-       }
+    if (strategy) {
+      setView('roadmap');
+      return;
+    }
+    setIsWaitingForStrategy(true);
+    if (!isPlanGenerating && profile && audit && businessId) {
+      triggerStrategyGeneration(profile, audit, businessId);
     }
   };
 
@@ -268,23 +275,27 @@ export default function MainApp() {
     }
   };
 
-  // --- CRITICAL LOGOUT FIX ---
   const handleLogout = async () => {
     try {
         setIsLoading(true);
-        // 1. Clear Supabase Session
-        await signOut();
-        // 2. Nuclear option: Clear Local Storage to prevent stale state
-        localStorage.clear();
-        // 3. Reset internal state
+        setLoadingMessage('Cerrando sesión...');
+        
+        // 1. Limpieza local primero para evitar parpadeos
         setSession(null);
         setProfile(null);
         setStrategy(null);
-        // 4. Force hard reload to login
-        window.location.href = '/';
+        localStorage.clear(); // Limpieza nuclear necesaria para este MVP
+        
+        // 2. Logout de Supabase
+        await signOut();
+        
+        // 3. Forzar estado
+        setView('auth');
     } catch (error) {
         console.error("Logout failed", error);
-        window.location.href = '/';
+        setView('auth');
+    } finally {
+        setIsLoading(false);
     }
   };
 
@@ -376,12 +387,12 @@ export default function MainApp() {
         profile={profile} 
         auditData={audit} 
         onContinue={handleReportContinue} 
-        isLoadingPlan={isPlanGenerating} 
+        isLoadingPlan={isPlanGenerating || isWaitingForStrategy} 
       />
     );
   }
 
-  // --- MAIN LAYOUT STRUCTURE (Fixing Alignment) ---
+  // --- MAIN LAYOUT STRUCTURE ---
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
@@ -394,13 +405,11 @@ export default function MainApp() {
       />
       
       <main className="flex-1 md:ml-72 relative min-h-screen transition-all duration-300">
-         {/* Top Mobile Header */}
          <div className="md:hidden flex justify-between items-center p-6 border-b border-white/5">
             <span className="text-white font-bold">upGrowt</span>
             <button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button>
          </div>
 
-         {/* Centered Content Container - Max Width 7xl for Premium Feel */}
          <div className="w-full max-w-7xl mx-auto p-4 md:p-8 lg:p-12">
             {children}
          </div>
@@ -438,7 +447,7 @@ export default function MainApp() {
     );
   }
 
-  // Fallback Loading - Should rarely be hit now, but provided with explicit message to avoid "Analizando estrategia" confusion.
+  // Fallback por seguridad
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950">
        <Loading message="Cargando interfaz..." />

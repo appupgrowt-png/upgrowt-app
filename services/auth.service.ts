@@ -1,4 +1,3 @@
-
 import { supabase } from '../lib/supabase';
 
 export const signIn = async (email: string, pass: string) => {
@@ -20,7 +19,13 @@ export const signUp = async (email: string, pass: string) => {
 };
 
 export const signOut = async () => {
-  await supabase.auth.signOut();
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error("Error signing out:", error.message);
+  } catch (e) {
+    console.error("Unexpected error signing out:", e);
+    // Proceed anyway as local storage will be cleared by MainApp
+  }
 };
 
 export const getSession = async () => {

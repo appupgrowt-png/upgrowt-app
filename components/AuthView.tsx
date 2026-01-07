@@ -20,7 +20,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // This ensures the redirect comes back to the current page (localhost or production)
+          // Explicit redirect to current origin to handle SPA routing correctly
           redirectTo: window.location.origin
         }
       });
@@ -42,6 +42,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
+          // Explicit redirect to current origin
           emailRedirectTo: window.location.origin,
         },
       });
