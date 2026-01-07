@@ -2,9 +2,19 @@
 import { createClient } from '@supabase/supabase-js'
 
 // Robust fallback to prevent 'URL is required' error that crashes the entire app.
-// This allows the UI to render even if Supabase isn't configured, 
-// so the user sees the Onboarding instead of a blank screen.
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// Export a helper to check if we are truly configured
+export const isSupabaseConfigured = () => {
+  return supabaseUrl.length > 0 && 
+         supabaseUrl !== 'https://placeholder.supabase.co' && 
+         supabaseKey.length > 0 &&
+         supabaseKey !== 'placeholder-key';
+};
+
+// Create client with fallbacks to avoid crash on init, but logic should check isSupabaseConfigured()
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co', 
+  supabaseKey || 'placeholder-key'
+);

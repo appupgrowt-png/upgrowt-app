@@ -15,11 +15,11 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
-import { saveBusinessProfile, saveStrategySnapshot, loadUserData, saveUserProgress } from './services/business.service';
+import { saveBusinessProfile, loadUserData, saveUserProgress } from './services/business.service';
 import { signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
-import { supabase } from './lib/supabase';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
 
 type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'error';
 
@@ -63,12 +63,39 @@ export default function MainApp() {
 
     const initApp = async () => {
       try {
-        console.log("App initializing...");
-        // 1. Check Session
-        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+        console.log("🚀 Initializing App...");
+        
+        // 0. Configuration Check
+        if (!isSupabaseConfigured()) {
+           console.warn("⚠️ Supabase credentials missing or using placeholder. Skipping network requests.");
+           if (mounted) {
+             setView('auth');
+             setIsLoading(false);
+           }
+           return;
+        }
+
+        // RACE CONDITION PROTECTION: Force timeout if Supabase hangs
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000));
+
+        // 1. Check Session with Timeout
+        let sessionResult: any;
+        try {
+           sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
+        } catch (e) {
+           console.warn("Session check timed out or failed, defaulting to Auth.");
+           if (mounted) {
+             setView('auth');
+             setIsLoading(false);
+           }
+           return;
+        }
+
+        const { data: { session: currentSession }, error } = sessionResult;
         
         if (error || !currentSession) {
-           console.log("No session found or error, showing Login.");
+           console.log("👤 No session found, showing Login.");
            if (mounted) {
              setView('auth');
              setIsLoading(false);
@@ -80,7 +107,7 @@ export default function MainApp() {
         if (mounted) {
           setSession(currentSession);
           setLoadingMessage('Sincronizando perfil...');
-          console.log("Session found for:", currentSession.user.email);
+          console.log("✅ Session found for:", currentSession.user.email);
         }
 
         // 3. Load Data
@@ -89,8 +116,8 @@ export default function MainApp() {
         if (!mounted) return;
 
         if (data && data.profile) {
-           // Existing User
-           console.log("Existing user profile loaded.");
+           // Existing User with Profile
+           console.log("📂 User profile loaded.");
            setBusinessId(data.businessId);
            setProfile(data.profile);
            if (data.profile.language) setLanguage(data.profile.language);
@@ -98,49 +125,46 @@ export default function MainApp() {
            if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
            if (data.strategy) {
+              // Happy Path: Full Data
               setStrategy(data.strategy);
               setAudit(data.strategy.audit);
               setView(data.weeklyPlan ? 'weekly_agency' : 'dashboard');
            } else {
-              // Inconsistent state (Profile YES, Strategy NO) -> Recover
-              console.warn("Profile found but strategy missing. Recovering...");
+              // Edge Case: Profile exists but Strategy is missing/corrupted
+              console.warn("⚠️ Profile found but strategy missing. Attempting recovery...");
               setShouldRecoverStrategy(true);
-              setLoadingMessage('Restaurando estrategia...');
-              return; // Keep loading true while effect handles recovery
+              return; 
            }
         } else {
            // New User (Session YES, Profile NO)
-           console.log("No profile found. Starting onboarding.");
+           console.log("✨ New user detected. Starting onboarding.");
            setView('transition'); // Leads to onboarding
         }
 
       } catch (e: any) {
-         console.error("Initialization Error:", e);
+         console.error("❌ Critical Init Error:", e);
          if (mounted) {
-           // On critical error, usually safeguard to Auth or Error view
-           // If it's a network error, maybe show Error. 
-           // For now, force Auth to allow retry logic
+           // If something explodes, safe fallback to Auth to allow retry
            setView('auth');
          }
       } finally {
-         if (mounted) setIsLoading(false);
+         // Only turn off loading if we haven't triggered recovery (which needs to keep loading UI)
+         if (mounted && !shouldRecoverStrategy) {
+            setIsLoading(false);
+         }
       }
     };
 
     initApp();
 
-    // Listen for Auth Changes (Sign Out, etc)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
-       console.log("Auth Change:", event);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
        if (event === 'SIGNED_OUT') {
          setSession(null);
          setView('auth');
          setIsLoading(false);
        } else if (event === 'SIGNED_IN') {
-         // If we catch a late SIGNED_IN (e.g. Magic Link), force reload to run initApp clean
-         // We check if we are NOT already authenticated to avoid loops
          if (!session) {
-            window.location.reload();
+             // Optional: handle reload logic here if needed
          }
        }
     });
@@ -209,16 +233,14 @@ export default function MainApp() {
       
     } catch (e: any) {
       console.error(e);
-      // Solo volver a onboarding si falló la creación del negocio crítico
       if (!businessId) setView('onboarding');
+      else setView('dashboard'); 
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleAuthSuccess = async (userId: string) => {
-    // This is called by AuthView on manual success (if any). 
-    // Usually OAuth redirects, but for robust handling:
+  const handleAuthSuccess = async () => {
     window.location.reload();
   };
   
@@ -266,11 +288,11 @@ export default function MainApp() {
     try {
         setIsLoading(true);
         setLoadingMessage('Cerrando sesión...');
+        await signOut();
         setSession(null);
         setProfile(null);
         setStrategy(null);
         localStorage.clear(); 
-        await signOut();
         setView('auth');
     } catch (error) {
         console.error("Logout failed", error);
@@ -431,10 +453,7 @@ export default function MainApp() {
     );
   }
 
-  // Fallback safe rendering to prevent white screen
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950">
-       <Loading message="Cargando interfaz..." />
-    </div>
-  );
+  // FALLBACK SAFEGUARD: If we get here, something is wrong with the state logic.
+  console.warn("⚠️ Invalid state reached. Redirecting to Auth.");
+  return <AuthView onSuccess={handleAuthSuccess} />;
 }

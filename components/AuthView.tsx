@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { motion } from 'framer-motion';
 import { Mail, ArrowRight, Loader2 } from 'lucide-react';
 
@@ -13,14 +14,22 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
   const [emailSent, setEmailSent] = useState(false);
   const [error, setError] = useState('');
 
+  const checkConfig = () => {
+    if (!isSupabaseConfigured()) {
+      setError('Error de configuración: Faltan credenciales de Supabase en el archivo .env');
+      return false;
+    }
+    return true;
+  };
+
   const handleGoogleLogin = async () => {
+    if (!checkConfig()) return;
     try {
       setIsLoading(true);
       setError('');
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Explicit redirect to current origin to handle SPA routing correctly
           redirectTo: window.location.origin
         }
       });
@@ -33,6 +42,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!checkConfig()) return;
     if (!email) return;
     
     setIsLoading(true);
@@ -42,7 +52,6 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          // Explicit redirect to current origin
           emailRedirectTo: window.location.origin,
         },
       });
