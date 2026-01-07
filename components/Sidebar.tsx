@@ -67,14 +67,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onLogout, onSettings, activeVi
       <div className="h-48 flex flex-col justify-center px-6 border-b border-white/5 relative shrink-0 z-10">
         
         <div className="relative z-10 flex flex-col items-center gap-6">
-          {/* Logo with STRONG Glow Effect & Larger Size */}
+          {/* Logo with STRONG Glow Effect & Larger Size (UPDATED SIZE) */}
           <div className="relative w-full flex justify-center">
-             {/* Intense backlight for logo */}
              <div className="absolute inset-0 bg-primary-400/30 blur-[40px] rounded-full opacity-60"></div>
              <img 
                src="/logo-light.png" 
                alt="UpGrowth" 
-               className="h-20 w-auto object-contain relative z-10 drop-shadow-[0_0_25px_rgba(34,211,238,0.5)]" 
+               className="h-24 w-auto object-contain relative z-10 drop-shadow-[0_0_25px_rgba(34,211,238,0.5)] transform hover:scale-105 transition-transform duration-500" 
              />
           </div>
           

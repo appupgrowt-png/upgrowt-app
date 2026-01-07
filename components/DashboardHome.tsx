@@ -339,7 +339,8 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   };
 
   return (
-    <div className="w-full max-w-[95vw] 2xl:max-w-[1800px] mx-auto space-y-8 animate-fade-in pb-20 px-4 md:px-6 relative">
+    // UPDATED CONTAINER WIDTH: REMOVED 95vw, SET TO STANDARD SAAS WIDTH
+    <div className="w-full mx-auto space-y-8 animate-fade-in pb-20 relative">
       <div className="absolute top-0 left-0 w-full h-[500px] pointer-events-none -z-10 overflow-hidden">
         <div className="absolute top-[-50px] left-[-50px] w-[600px] h-[600px] bg-primary-900/10 rounded-full blur-[120px]"></div>
         <div className="absolute top-20 right-20 w-[400px] h-[400px] bg-blue-900/10 rounded-full blur-[100px]"></div>
