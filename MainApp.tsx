@@ -52,6 +52,7 @@ export default function MainApp() {
     let mounted = true;
 
     const loadDataForUser = async (userId: string) => {
+      let recover = false;
       try {
         setLoadingMessage('Sincronizando estrategia...');
         const data = await loadUserData(userId);
@@ -82,6 +83,7 @@ export default function MainApp() {
              // CRITICAL FIX: Do NOT redirect to onboarding. Recover state.
              console.log("Profile found, recovering strategy...");
              setShouldRecoverStrategy(true);
+             recover = true;
              // Keep view in loading or move to report to prevent onboarding flash
           }
         } else {
@@ -100,7 +102,7 @@ export default function MainApp() {
            }
         }
       } finally {
-        if (mounted && !shouldRecoverStrategy) setIsLoading(false);
+        if (mounted && !recover) setIsLoading(false);
       }
     };
 
@@ -436,5 +438,10 @@ export default function MainApp() {
     );
   }
 
-  return <Loading />;
+  // Fallback Loading - Should rarely be hit now, but provided with explicit message to avoid "Analizando estrategia" confusion.
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-950">
+       <Loading message="Cargando interfaz..." />
+    </div>
+  );
 }
