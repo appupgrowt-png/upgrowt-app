@@ -3,13 +3,10 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { UserProfile, ComprehensiveStrategy, ChatMessage, Language, BusinessAudit, ExecutionState, ContentSuggestion, CopySuggestion, TrendItem, ContentFramework, WeeklyAgencyPlan } from "../types";
 
 // --- LAZY INITIALIZATION ---
-// We initialize this inside functions to prevent the app from crashing at startup
-// if the API Key is missing or process.env is undefined.
 const getAI = () => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
     console.error("CRITICAL: API_KEY is missing. Please check your .env file or vite.config.ts");
-    // Return a dummy or throw specific error to be caught by UI
     throw new Error("API Key missing"); 
   }
   return new GoogleGenAI({ apiKey });
@@ -18,13 +15,47 @@ const getAI = () => {
 // --- HELPER: ROBUST JSON PARSER ---
 const parseJSON = (text: string) => {
   try {
-    // Remove Markdown code blocks if present (e.g., ```json ... ```)
     const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(cleanText);
   } catch (e) {
     console.error("Failed to parse JSON:", text);
     throw new Error("Invalid AI Response Format");
   }
+};
+
+// --- HELPER: RATE LIMIT RETRY ---
+const callWithRetry = async <T>(fn: () => Promise<T>, retries = 3, initialDelay = 2000): Promise<T> => {
+  let attempt = 0;
+  while (attempt <= retries) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      
+      const isRateLimit = 
+        error?.status === 429 || 
+        error?.status === 'RESOURCE_EXHAUSTED' ||
+        error?.message?.includes('429') || 
+        error?.message?.includes('quota') ||
+        error?.message?.includes('RESOURCE_EXHAUSTED');
+
+      if (isRateLimit && attempt <= retries) {
+        let waitTime = initialDelay * Math.pow(2, attempt - 1);
+        
+        // Try to extract specific wait time from error message
+        const match = error?.message?.match(/retry in ([\d\.]+)s/);
+        if (match && match[1]) {
+           waitTime = Math.ceil(parseFloat(match[1]) * 1000) + 1000; // Buffer
+        }
+
+        console.warn(`⚠️ Rate limit hit (Attempt ${attempt}/${retries}). Waiting ${Math.round(waitTime/1000)}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries exceeded");
 };
 
 // --- SCHEMAS ---
@@ -243,6 +274,16 @@ const weeklyPlanSchema: Schema = {
   required: ["weekNumber", "weeklyPriority", "dailyPlan"]
 };
 
+// --- MODEL CONFIGURATION ---
+
+// DEEP_MODEL: Gemini 1.5 Pro. Slower, massive context, best reasoning. 
+// Used for: Audits, Strategy Creation, Weekly Planning, Final Documents.
+const DEEP_MODEL = "gemini-1.5-pro";
+
+// FAST_MODEL: Gemini 1.5 Flash. Fast, efficient, good for tasks.
+// Used for: Chat, Content Generation, Trends, Copywriting.
+const FAST_MODEL = "gemini-1.5-flash";
+
 // --- FUNCTIONS ---
 
 export const generateAuditStream = async (
@@ -251,7 +292,6 @@ export const generateAuditStream = async (
   onChunk: (text: string) => void
 ): Promise<BusinessAudit> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -266,28 +306,31 @@ export const generateAuditStream = async (
     - Capacity: ${profile.executionCapacity}
   `;
 
-  try {
-    const result = await ai.models.generateContentStream({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: auditSchema,
-      }
-    });
+  return callWithRetry(async () => {
+    try {
+      // USING DEEP MODEL FOR STRATEGIC ANALYSIS
+      const result = await ai.models.generateContentStream({
+        model: DEEP_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: auditSchema,
+        }
+      });
 
-    let fullText = '';
-    for await (const chunk of result) {
-      if (chunk.text) {
-        fullText += chunk.text;
-        onChunk(fullText); 
+      let fullText = '';
+      for await (const chunk of result) {
+        if (chunk.text) {
+          fullText += chunk.text;
+          onChunk(fullText); 
+        }
       }
+      return parseJSON(fullText) as BusinessAudit;
+    } catch (error) {
+      console.error("Audit Stream Error:", error);
+      throw error;
     }
-    return parseJSON(fullText) as BusinessAudit;
-  } catch (error) {
-    console.error("Audit Stream Error:", error);
-    throw error;
-  }
+  });
 };
 
 export const generateActionPlan = async (
@@ -296,7 +339,6 @@ export const generateActionPlan = async (
   language: Language = 'es'
 ): Promise<Omit<ComprehensiveStrategy, 'audit'>> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -315,22 +357,25 @@ export const generateActionPlan = async (
     Generate a HIGH-QUALITY, READY-TO-USE example for their PRIORITY #1.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: actionPlanSchema,
-      }
-    });
-    const text = response.text;
-    if (!text) throw new Error("No output");
-    return parseJSON(text);
-  } catch (error) {
-    console.error("Action Plan Error:", error);
-    throw error;
-  }
+  return callWithRetry(async () => {
+    try {
+      // USING DEEP MODEL FOR COMPLEX STRATEGY GENERATION
+      const response = await ai.models.generateContent({
+        model: DEEP_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: actionPlanSchema,
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("No output");
+      return parseJSON(text);
+    } catch (error) {
+      console.error("Action Plan Error:", error);
+      throw error;
+    }
+  });
 };
 
 export const generateModuleDeliverable = async (
@@ -339,7 +384,6 @@ export const generateModuleDeliverable = async (
   language: Language = 'es'
 ): Promise<string> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -350,14 +394,17 @@ export const generateModuleDeliverable = async (
     FORMAT: Markdown, Professional, High-Value.
   `;
 
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: prompt
+  return callWithRetry(async () => {
+    // USING DEEP MODEL FOR HIGH QUALITY DOCUMENTATION
+    const response = await ai.models.generateContent({
+      model: DEEP_MODEL,
+      contents: prompt
+    });
+    return response.text || "Error";
   });
-  return response.text || "Error";
 };
 
-// --- NEW: DYNAMIC TACTICAL GENERATORS ---
+// --- NEW: DYNAMIC TACTICAL GENERATORS (USING FAST MODEL) ---
 
 export const generateContentSuggestion = async (
   profile: UserProfile,
@@ -365,7 +412,6 @@ export const generateContentSuggestion = async (
   language: Language = 'es'
 ): Promise<ContentSuggestion> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -382,22 +428,25 @@ export const generateContentSuggestion = async (
     - Visuals: Specific camera directions (e.g. "Green screen effect", "Close up on product").
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: contentSuggestionSchema,
-      }
-    });
-    const text = response.text;
-    if (!text) throw new Error("No output");
-    return parseJSON(text);
-  } catch (error) {
-    console.error("Content Gen Error:", error);
-    throw error;
-  }
+  return callWithRetry(async () => {
+    try {
+      // USING FAST MODEL FOR ITERATIVE CREATIVITY
+      const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: contentSuggestionSchema,
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("No output");
+      return parseJSON(text);
+    } catch (error) {
+      console.error("Content Gen Error:", error);
+      throw error;
+    }
+  });
 };
 
 export const refineContentScript = async (
@@ -406,7 +455,6 @@ export const refineContentScript = async (
   language: Language = 'es'
 ): Promise<string> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const prompt = `
     ACT AS: Expert Script Editor.
     TASK: Rewrite the following script based on user instruction.
@@ -415,11 +463,14 @@ export const refineContentScript = async (
     LANGUAGE: ${language === 'en' ? 'English' : 'Spanish'}.
     RETURN ONLY THE NEW SCRIPT TEXT. NO EXPLANATION.
   `;
-  const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt
+  return callWithRetry(async () => {
+    // USING FAST MODEL FOR QUICK EDITS
+    const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: prompt
+    });
+    return response.text || originalScript;
   });
-  return response.text || originalScript;
 };
 
 export const generateCopySuggestion = async (
@@ -428,7 +479,6 @@ export const generateCopySuggestion = async (
   language: Language = 'es'
 ): Promise<CopySuggestion> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -439,22 +489,25 @@ export const generateCopySuggestion = async (
     TONE: ${profile.tone}.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: copySuggestionSchema,
-      }
-    });
-    const text = response.text;
-    if (!text) throw new Error("No output");
-    return parseJSON(text);
-  } catch (error) {
-    console.error("Copy Gen Error:", error);
-    throw error;
-  }
+  return callWithRetry(async () => {
+    try {
+      // USING FAST MODEL FOR COPY
+      const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: copySuggestionSchema,
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("No output");
+      return parseJSON(text);
+    } catch (error) {
+      console.error("Copy Gen Error:", error);
+      throw error;
+    }
+  });
 };
 
 export const generateFreshTrends = async (
@@ -462,7 +515,6 @@ export const generateFreshTrends = async (
   language: Language = 'es'
 ): Promise<TrendItem[]> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -475,22 +527,25 @@ export const generateFreshTrends = async (
     Assign a 'viralScore' between 70 and 99 based on current algorithm probability.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: trendsListSchema,
-      }
-    });
-    const text = response.text;
-    if (!text) throw new Error("No output");
-    return parseJSON(text);
-  } catch (error) {
-    console.error("Trends Gen Error:", error);
-    throw error;
-  }
+  return callWithRetry(async () => {
+    try {
+      // USING FAST MODEL FOR TRENDS
+      const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: trendsListSchema,
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("No output");
+      return parseJSON(text);
+    } catch (error) {
+      console.error("Trends Gen Error:", error);
+      throw error;
+    }
+  });
 };
 
 export const generateWeeklyAgencyPlan = async (
@@ -498,7 +553,6 @@ export const generateWeeklyAgencyPlan = async (
   language: Language = 'es'
 ): Promise<WeeklyAgencyPlan> => {
   const ai = getAI();
-  const model = "gemini-3-flash-preview";
   const langInstruction = language === 'en' ? "OUTPUT IN ENGLISH." : "OUTPUT IN SPANISH.";
 
   const prompt = `
@@ -516,44 +570,58 @@ export const generateWeeklyAgencyPlan = async (
     - TONE: Directive, agency-like, assuring.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: weeklyPlanSchema,
-      }
-    });
-    const text = response.text;
-    if (!text) throw new Error("No output");
-    const data = parseJSON(text);
-    return {
-      ...data,
-      startDate: new Date().toISOString()
-    };
-  } catch (error) {
-    console.error("Weekly Plan Gen Error:", error);
-    throw error;
-  }
+  return callWithRetry(async () => {
+    try {
+      // USING DEEP MODEL FOR WEEKLY PLANNING (REQUIRES STRATEGIC ALIGNMENT)
+      const response = await ai.models.generateContent({
+        model: DEEP_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: weeklyPlanSchema,
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("No output");
+      const data = parseJSON(text);
+      return {
+        ...data,
+        startDate: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error("Weekly Plan Gen Error:", error);
+      throw error;
+    }
+  });
 };
 
-// --- CORE MESSAGE (Keep as is) ---
+// --- CORE MESSAGE ---
 export const generateCoreMessage = async (businessName: string, audience: string, strength: string, problem: string) => {
     const ai = getAI();
     const prompt = `ACT AS: Senior Brand Strategist. TASK: Create Core Message. Business: ${businessName}, Audience: ${audience}, Strength: ${strength}, Problem: ${problem}. Format: 'Ayudamos a...'. Return JSON {message, explanation, usage}.`;
-    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt, config: { responseMimeType: "application/json" } });
-    return parseJSON(response.text!);
+    
+    return callWithRetry(async () => {
+      // USING FAST MODEL FOR INITIAL ONBOARDING TO KEEP IT SNAPPY
+      const response = await ai.models.generateContent({ model: FAST_MODEL, contents: prompt, config: { responseMimeType: "application/json" } });
+      return parseJSON(response.text!);
+    });
 };
+
 export const refineCoreMessage = async (currentMessage: string, feedback: string) => {
     const ai = getAI();
     const prompt = `Refine message: ${currentMessage} with feedback: ${feedback}. Return JSON.`;
-    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt, config: { responseMimeType: "application/json" } });
-    return parseJSON(response.text!);
+    return callWithRetry(async () => {
+      const response = await ai.models.generateContent({ model: FAST_MODEL, contents: prompt, config: { responseMimeType: "application/json" } });
+      return parseJSON(response.text!);
+    });
 };
+
 export const chatWithConsultant = async (history: ChatMessage[], newMessage: string, profile: UserProfile, strategy: ComprehensiveStrategy, language: Language, executionState?: ExecutionState) => {
     const ai = getAI();
     const prompt = `Chat context: ${JSON.stringify(profile)}. execution: ${JSON.stringify(executionState)}. Last msg: ${newMessage}`;
-    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
-    return response.text!;
+    return callWithRetry(async () => {
+      // USING FAST MODEL FOR CHAT RESPONSIVENESS
+      const response = await ai.models.generateContent({ model: FAST_MODEL, contents: prompt });
+      return response.text!;
+    });
 };
