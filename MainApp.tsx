@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Sidebar } from './components/Sidebar';
@@ -60,95 +61,88 @@ export default function MainApp() {
   useEffect(() => {
     let mounted = true;
 
-    // Función centralizada para cargar datos y decidir la vista
-    const handleSessionFound = async (currentSession: any) => {
+    const initApp = async () => {
       try {
-        setSession(currentSession);
-        setLoadingMessage('Sincronizando perfil...');
+        console.log("App initializing...");
+        // 1. Check Session
+        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
         
-        // Cargar datos de negocio
+        if (error || !currentSession) {
+           console.log("No session found or error, showing Login.");
+           if (mounted) {
+             setView('auth');
+             setIsLoading(false);
+           }
+           return;
+        }
+
+        // 2. Session found
+        if (mounted) {
+          setSession(currentSession);
+          setLoadingMessage('Sincronizando perfil...');
+          console.log("Session found for:", currentSession.user.email);
+        }
+
+        // 3. Load Data
         const data = await loadUserData(currentSession.user.id);
         
         if (!mounted) return;
 
         if (data && data.profile) {
-          // CASO 1: USUARIO EXISTENTE (Tiene perfil)
-          console.log("User found, restoring state...");
-          setBusinessId(data.businessId);
-          setProfile(data.profile);
-          if (data.profile.language) setLanguage(data.profile.language);
-          
-          if (data.executionState) setExecutionState(data.executionState);
-          if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
+           // Existing User
+           console.log("Existing user profile loaded.");
+           setBusinessId(data.businessId);
+           setProfile(data.profile);
+           if (data.profile.language) setLanguage(data.profile.language);
+           if (data.executionState) setExecutionState(data.executionState);
+           if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
-          if (data.strategy) {
-            // USUARIO COMPLETO (Perfil + Estrategia)
-            setStrategy(data.strategy);
-            setAudit(data.strategy.audit);
-            
-            // Decidir vista inicial basada en progreso
-            if (data.weeklyPlan) {
-              setView('weekly_agency');
-            } else {
-              setView('dashboard');
-            }
-          } else {
-             // ESTADO INCONSISTENTE (Perfil existe, pero Estrategia no)
-             // Intentar recuperación, NO mandar a onboarding
-             console.warn("Profile exists but strategy missing. Attempting recovery.");
-             setShouldRecoverStrategy(true);
-             // Mantener en loading o report mientras se recupera
-          }
+           if (data.strategy) {
+              setStrategy(data.strategy);
+              setAudit(data.strategy.audit);
+              setView(data.weeklyPlan ? 'weekly_agency' : 'dashboard');
+           } else {
+              // Inconsistent state (Profile YES, Strategy NO) -> Recover
+              console.warn("Profile found but strategy missing. Recovering...");
+              setShouldRecoverStrategy(true);
+              setLoadingMessage('Restaurando estrategia...');
+              return; // Keep loading true while effect handles recovery
+           }
         } else {
-          // CASO 2: USUARIO NUEVO (Sin perfil en DB)
-          console.log("New user detected. Starting Onboarding.");
-          setView('transition'); // Lleva al onboarding
+           // New User (Session YES, Profile NO)
+           console.log("No profile found. Starting onboarding.");
+           setView('transition'); // Leads to onboarding
         }
-      } catch (err) {
-        console.error("Critical Data Load Error:", err);
-        if (mounted) {
-           setAppError("Error cargando tus datos. Por favor refresca.");
-           setView('error');
-        }
+
+      } catch (e: any) {
+         console.error("Initialization Error:", e);
+         if (mounted) {
+           // On critical error, usually safeguard to Auth or Error view
+           // If it's a network error, maybe show Error. 
+           // For now, force Auth to allow retry logic
+           setView('auth');
+         }
       } finally {
-        if (mounted) setIsLoading(false);
+         if (mounted) setIsLoading(false);
       }
     };
 
-    // 1. Inicializar Listener de Supabase
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
-      console.log("Auth Event:", event);
-      
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        if (newSession) {
-           // Solo recargar si no tenemos sesión o si cambió el usuario
-           // Esto evita recargas innecesarias, pero asegura hidratación en F5
-           handleSessionFound(newSession);
-        }
-      } else if (event === 'SIGNED_OUT') {
-        setSession(null);
-        setProfile(null);
-        setStrategy(null);
-        setView('auth');
-        setIsLoading(false);
-      } else if (event === 'INITIAL_SESSION') {
-         // Manejado por getSession abajo, pero útil para debug
-         if (!newSession) {
-            setView('auth');
-            setIsLoading(false);
-         }
-      }
-    });
+    initApp();
 
-    // 2. Chequeo inicial imperativo (para F5/Reload)
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
-      if (initialSession) {
-        handleSessionFound(initialSession);
-      } else {
-        // Si no hay sesión inicial, mostramos login
-        setIsLoading(false);
-        setView('auth');
-      }
+    // Listen for Auth Changes (Sign Out, etc)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+       console.log("Auth Change:", event);
+       if (event === 'SIGNED_OUT') {
+         setSession(null);
+         setView('auth');
+         setIsLoading(false);
+       } else if (event === 'SIGNED_IN') {
+         // If we catch a late SIGNED_IN (e.g. Magic Link), force reload to run initApp clean
+         // We check if we are NOT already authenticated to avoid loops
+         if (!session) {
+            window.location.reload();
+         }
+       }
     });
 
     return () => {
@@ -156,13 +150,6 @@ export default function MainApp() {
       subscription.unsubscribe();
     };
   }, []); 
-
-  // --- SAVE STRATEGY SNAPSHOT ---
-  useEffect(() => {
-    if (session && businessId && profile && strategy && !isLoading) {
-       saveStrategySnapshot(businessId, profile, strategy).catch(console.error);
-    }
-  }, [strategy, session, businessId, profile, isLoading]);
 
   // --- AUTO RECOVERY ---
   useEffect(() => {
@@ -230,9 +217,9 @@ export default function MainApp() {
   };
 
   const handleAuthSuccess = async (userId: string) => {
-    // No hacemos nada manual aquí, el onAuthStateChange detectará el SIGNED_IN
-    setIsLoading(true);
-    setLoadingMessage('Verificando credenciales...');
+    // This is called by AuthView on manual success (if any). 
+    // Usually OAuth redirects, but for robust handling:
+    window.location.reload();
   };
   
   const handleTransitionComplete = () => {
@@ -279,17 +266,11 @@ export default function MainApp() {
     try {
         setIsLoading(true);
         setLoadingMessage('Cerrando sesión...');
-        
-        // 1. Limpieza local primero para evitar parpadeos
         setSession(null);
         setProfile(null);
         setStrategy(null);
-        localStorage.clear(); // Limpieza nuclear necesaria para este MVP
-        
-        // 2. Logout de Supabase
+        localStorage.clear(); 
         await signOut();
-        
-        // 3. Forzar estado
         setView('auth');
     } catch (error) {
         console.error("Logout failed", error);
@@ -342,13 +323,14 @@ export default function MainApp() {
         <div className="glass-panel p-10 border-red-500/20 max-w-lg">
            <div className="text-5xl mb-4">🛠️</div>
            <h2 className="text-2xl font-bold text-white mb-2">Error de Sistema</h2>
-           <p className="text-slate-400 mb-6">{appError}</p>
+           <p className="text-slate-400 mb-6">{appError || "Ha ocurrido un error inesperado."}</p>
            <Button onClick={() => window.location.reload()}>Recargar Aplicación</Button>
         </div>
       </div>
     );
   }
 
+  // Priority to Loading Screen if explicit loading requested
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -361,10 +343,12 @@ export default function MainApp() {
     );
   }
 
+  // Priority to Auth View
   if (view === 'auth') {
     return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
+  // Only renders if NOT loading and NOT auth
   if (view === 'transition') {
     return <TransitionScreen onComplete={handleTransitionComplete} />;
   }
@@ -447,7 +431,7 @@ export default function MainApp() {
     );
   }
 
-  // Fallback por seguridad
+  // Fallback safe rendering to prevent white screen
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950">
        <Loading message="Cargando interfaz..." />
