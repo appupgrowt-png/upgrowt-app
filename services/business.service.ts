@@ -2,6 +2,15 @@
 import { supabase } from '../lib/supabase';
 import { UserProfile, ComprehensiveStrategy, ExecutionState, WeeklyAgencyPlan } from '../types';
 
+// Definición explícita del tipo de retorno para evitar errores de inferencia
+export interface UserData {
+  businessId: string | null;
+  profile: UserProfile | null;
+  strategy: ComprehensiveStrategy | null;
+  executionState: ExecutionState;
+  weeklyPlan: WeeklyAgencyPlan | null;
+}
+
 // 1. Save Profile Only (Used during Onboarding -> Auth transition)
 export const saveBusinessProfile = async (userId: string, profile: UserProfile) => {
   const { data, error } = await supabase
@@ -20,7 +29,7 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
   return data;
 };
 
-// 2. Save Strategy (Used when AI generation finishes)
+// 2. Save Strategy
 export const saveStrategySnapshot = async (businessId: string, profile: UserProfile, strategy: ComprehensiveStrategy) => {
   const { error } = await supabase
     .from('strategy_summary')
@@ -34,19 +43,9 @@ export const saveStrategySnapshot = async (businessId: string, profile: UserProf
 };
 
 // 3. Load Full Data (Critical Function)
-export const loadUserData = async (userId: string) => {
+export const loadUserData = async (userId: string): Promise<UserData | null> => {
   try {
-    // Check connection first
-    const { error: healthCheck } = await supabase.from('business_profiles').select('count', { count: 'exact', head: true });
-    if (healthCheck && healthCheck.code !== 'PGRST116') { // Ignore "no rows" error, worry about connection errors
-       console.warn("Health Check Warning:", healthCheck);
-       // If unauthorized, throw immediately to trigger auto-logout in MainApp
-       if (healthCheck.code === '401' || healthCheck.message?.includes('JWT')) {
-         throw new Error('AUTH_INVALID');
-       }
-    }
-
-    // A. Obtener Business Profile
+    // A. Obtener Business Profile directamente
     const { data: business, error: busError } = await supabase
       .from('business_profiles')
       .select('id, business_name, profile_data')
@@ -54,14 +53,15 @@ export const loadUserData = async (userId: string) => {
       .maybeSingle(); 
 
     if (busError) {
-       console.error("Error cargando perfil de negocio:", busError.message);
-       // Si hay error de RLS o permiso, asumimos usuario nuevo o inválido
+       console.warn("DB Read Error (Business):", busError.message);
+       if (busError.code === '401' || busError.code === 'PGRST301') {
+          throw new Error('AUTH_INVALID');
+       }
        return null; 
     }
 
     if (!business) {
-       // El usuario tiene Auth válido pero NO tiene perfil en DB.
-       // Retornamos objeto vacio para activar flujo de Onboarding.
+       // Usuario autenticado pero sin datos de negocio -> Onboarding
        return { 
          businessId: null, 
          profile: null, 
@@ -78,26 +78,25 @@ export const loadUserData = async (userId: string) => {
       .eq('business_id', business.id)
       .maybeSingle();
 
-    // C. Obtener Progreso (Execution & Weekly)
+    // C. Obtener Progreso
     const { data: progressData } = await supabase
       .from('user_progress')
       .select('execution_state, weekly_state')
       .eq('business_id', business.id)
       .maybeSingle();
 
-    // Resolver el perfil más actualizado
     const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
 
     return {
       businessId: business.id,
       profile: resolvedProfile,
       strategy: strategyData?.strategy_snapshot?.strategy as ComprehensiveStrategy || null,
-      executionState: progressData?.execution_state || {},
-      weeklyPlan: progressData?.weekly_state || null
+      executionState: (progressData?.execution_state as ExecutionState) || {},
+      weeklyPlan: (progressData?.weekly_state as WeeklyAgencyPlan) || null
     };
   } catch (error: any) {
-    console.error("Excepción en loadUserData:", error);
-    if (error.message === 'AUTH_INVALID') throw error; // Re-throw auth errors to force logout
+    if (error.message === 'AUTH_INVALID') throw error;
+    console.error("Critical Load Error:", error);
     return null;
   }
 };
