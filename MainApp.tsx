@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Sidebar } from './components/Sidebar';
 import { ConsultancyReport } from './components/ConsultancyReport';
@@ -21,151 +21,159 @@ import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionS
 import { t } from './utils/i18n';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 
-type ViewState = 'loading' | 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'error';
+// ESTADOS DEL SISTEMA
+type SystemStatus = 'BOOTING' | 'CHECKING_SESSION' | 'FETCHING_DB' | 'READY' | 'ERROR';
+type ViewState = 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency';
 
 export default function MainApp() {
-  // Auth State
+  // --- STATE: SYSTEM ---
+  const [status, setStatus] = useState<SystemStatus>('BOOTING');
+  const [view, setView] = useState<ViewState>('auth');
+  const [appError, setAppError] = useState<string | null>(null);
+  
+  // --- STATE: DATA ---
   const [session, setSession] = useState<any>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
-
-  // App Data
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [audit, setAudit] = useState<BusinessAudit | null>(null);
   const [strategy, setStrategy] = useState<ComprehensiveStrategy | null>(null);
   const [executionState, setExecutionState] = useState<ExecutionState>({});
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyAgencyPlan | null>(null);
-  
-  // UI State
-  const [isLoading, setIsLoading] = useState(true);
+
+  // --- STATE: UI ---
   const [loadingMessage, setLoadingMessage] = useState<string>('Iniciando sistema...');
   const [streamingLog, setStreamingLog] = useState<string>('');
+  const [language, setLanguage] = useState<Language>('es');
+  const [sidebarAction, setSidebarAction] = useState<string>('');
+
+  // --- STATE: GENERATION PROCESS ---
   const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
-  const [view, setView] = useState<ViewState>('loading');
-  const [sidebarAction, setSidebarAction] = useState<string>('');
-  const [language, setLanguage] = useState<Language>('es');
-  const [appError, setAppError] = useState<string | null>(null);
-
-  // Recovery State
   const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
 
-  // --- AUTO NAVIGATE WHEN STRATEGY IS READY ---
-  useEffect(() => {
-    if (isWaitingForStrategy && strategy) {
-      setIsWaitingForStrategy(false);
-      setView('roadmap');
-    }
-  }, [strategy, isWaitingForStrategy]);
+  // ---------------------------------------------------------------------------
+  // 1. LOGICA DE CARGA DE DATOS (Centralizada)
+  // ---------------------------------------------------------------------------
+  const syncUserData = useCallback(async (userId: string) => {
+    setStatus('FETCHING_DB');
+    setLoadingMessage('Sincronizando base de datos...');
+    
+    try {
+      const data = await loadUserData(userId);
+      
+      if (!data) {
+        throw new Error("Error crítico al leer la base de datos.");
+      }
 
-  // --- CORE AUTHENTICATION & ROUTING LOGIC ---
+      // CASO A: Usuario Nuevo (Auth OK, DB vacía)
+      if (!data.businessId || !data.profile) {
+        console.log("🆕 Usuario nuevo detectado -> Onboarding");
+        setBusinessId(null);
+        setProfile(null);
+        setView('transition'); // Animación de entrada -> Onboarding
+        setStatus('READY');
+        return;
+      }
+
+      // CASO B: Usuario Existente
+      console.log("✅ Usuario existente cargado:", data.profile.businessName);
+      setBusinessId(data.businessId);
+      setProfile(data.profile);
+      
+      // Restaurar preferencias
+      if (data.profile.language) setLanguage(data.profile.language);
+      if (data.executionState) setExecutionState(data.executionState);
+      if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
+
+      // Determinar Vista Basada en Progreso
+      if (data.strategy) {
+         setStrategy(data.strategy);
+         setAudit(data.strategy.audit);
+         
+         if (data.weeklyPlan) {
+           setView('weekly_agency');
+         } else {
+           setView('dashboard');
+         }
+      } else {
+         // Edge Case: Perfil existe pero estrategia falló anteriormente
+         console.warn("⚠️ Perfil encontrado sin estrategia. Iniciando recuperación.");
+         setShouldRecoverStrategy(true);
+         // No cambiamos la vista aquí, dejamos que el Effect de recuperación actúe
+      }
+      
+      setStatus('READY');
+
+    } catch (err: any) {
+      console.error("❌ Database Sync Error:", err);
+      setAppError("No pudimos cargar tu información. Revisa tu conexión.");
+      setStatus('ERROR');
+    }
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // 2. BOOTSTRAP (Inicialización)
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     let mounted = true;
 
-    const initApp = async () => {
-      try {
-        console.log("🚀 Initializing App...");
-        
-        // 0. Configuration Check
-        if (!isSupabaseConfigured()) {
-           console.warn("⚠️ Supabase credentials missing or using placeholder. Skipping network requests.");
-           if (mounted) {
-             setView('auth');
-             setIsLoading(false);
-           }
-           return;
-        }
-
-        // RACE CONDITION PROTECTION: Force timeout if Supabase hangs
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000));
-
-        // 1. Check Session with Timeout
-        let sessionResult: any;
-        try {
-           sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
-        } catch (e) {
-           console.warn("Session check timed out or failed, defaulting to Auth.");
-           if (mounted) {
-             setView('auth');
-             setIsLoading(false);
-           }
-           return;
-        }
-
-        const { data: { session: currentSession }, error } = sessionResult;
-        
-        if (error || !currentSession) {
-           console.log("👤 No session found, showing Login.");
-           if (mounted) {
-             setView('auth');
-             setIsLoading(false);
-           }
-           return;
-        }
-
-        // 2. Session found
+    const bootstrap = async () => {
+      // A. Check Config
+      if (!isSupabaseConfigured()) {
         if (mounted) {
-          setSession(currentSession);
-          setLoadingMessage('Sincronizando perfil...');
-          console.log("✅ Session found for:", currentSession.user.email);
-        }
-
-        // 3. Load Data
-        const data = await loadUserData(currentSession.user.id);
-        
-        if (!mounted) return;
-
-        if (data && data.profile) {
-           // Existing User with Profile
-           console.log("📂 User profile loaded.");
-           setBusinessId(data.businessId);
-           setProfile(data.profile);
-           if (data.profile.language) setLanguage(data.profile.language);
-           if (data.executionState) setExecutionState(data.executionState);
-           if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
-
-           if (data.strategy) {
-              // Happy Path: Full Data
-              setStrategy(data.strategy);
-              setAudit(data.strategy.audit);
-              setView(data.weeklyPlan ? 'weekly_agency' : 'dashboard');
-           } else {
-              // Edge Case: Profile exists but Strategy is missing/corrupted
-              console.warn("⚠️ Profile found but strategy missing. Attempting recovery...");
-              setShouldRecoverStrategy(true);
-              return; 
-           }
-        } else {
-           // New User (Session YES, Profile NO)
-           console.log("✨ New user detected. Starting onboarding.");
-           setView('transition'); // Leads to onboarding
-        }
-
-      } catch (e: any) {
-         console.error("❌ Critical Init Error:", e);
-         if (mounted) {
-           // If something explodes, safe fallback to Auth to allow retry
+           console.warn("⚠️ Supabase no configurado.");
+           setStatus('READY'); 
            setView('auth');
-         }
-      } finally {
-         // Only turn off loading if we haven't triggered recovery (which needs to keep loading UI)
-         if (mounted && !shouldRecoverStrategy) {
-            setIsLoading(false);
-         }
+        }
+        return;
+      }
+
+      // B. Check Session
+      setStatus('CHECKING_SESSION');
+      
+      // Manejar OAuth Redirect (Hash en URL)
+      // Si hay hash, dejamos que el listener onAuthStateChange lo capture, no hacemos getSession manual
+      if (window.location.hash && window.location.hash.includes('access_token')) {
+        console.log("🔄 OAuth Redirect detectado. Esperando listener...");
+        return; 
+      }
+
+      const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+
+      if (mounted) {
+        if (currentSession && !error) {
+           console.log("👤 Sesión activa encontrada.");
+           setSession(currentSession);
+           await syncUserData(currentSession.user.id);
+        } else {
+           console.log("🔒 No hay sesión. Mostrando Login.");
+           setStatus('READY');
+           setView('auth');
+        }
       }
     };
 
-    initApp();
+    bootstrap();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-       if (event === 'SIGNED_OUT') {
-         setSession(null);
-         setView('auth');
-         setIsLoading(false);
-       } else if (event === 'SIGNED_IN') {
-         if (!session) {
-             // Optional: handle reload logic here if needed
-         }
+    // C. Auth Listener (Maneja Login, Logout y OAuth)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+       console.log(`🔔 Auth Event: ${event}`);
+       
+       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (newSession) {
+             setSession(newSession);
+             // Solo cargamos datos si no estamos ya en ello para evitar doble fetch
+             if (status !== 'FETCHING_DB') {
+                await syncUserData(newSession.user.id);
+             }
+          }
+       } else if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setProfile(null);
+          setStrategy(null);
+          setBusinessId(null);
+          setStatus('READY');
+          setView('auth');
        }
     });
 
@@ -173,18 +181,33 @@ export default function MainApp() {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []); 
+  }, [syncUserData]); // syncUserData es estable por useCallback
 
-  // --- AUTO RECOVERY ---
+  // ---------------------------------------------------------------------------
+  // 3. AUTO-RECUPERACIÓN Y NAVEGACIÓN
+  // ---------------------------------------------------------------------------
+
+  // Recuperar estrategia si falta (Caso "Limbo")
   useEffect(() => {
-    if (shouldRecoverStrategy && profile && session) {
+    if (shouldRecoverStrategy && profile && session && status === 'READY') {
+      console.log("🚑 Ejecutando recuperación de estrategia...");
       setShouldRecoverStrategy(false);
-      handleProfileSave(profile);
+      handleProfileSave(profile); // Re-inicia el proceso de generación
     }
-  }, [shouldRecoverStrategy, profile, session]);
+  }, [shouldRecoverStrategy, profile, session, status]);
+
+  // Navegar al roadmap cuando la estrategia esté lista
+  useEffect(() => {
+    if (isWaitingForStrategy && strategy) {
+      setIsWaitingForStrategy(false);
+      setView('roadmap');
+    }
+  }, [strategy, isWaitingForStrategy]);
 
 
-  // --- HANDLERS ---
+  // ---------------------------------------------------------------------------
+  // 4. HANDLERS DE ACCIÓN
+  // ---------------------------------------------------------------------------
 
   const handleLanguageChange = (lang: Language) => {
     setLanguage(lang);
@@ -196,14 +219,18 @@ export default function MainApp() {
     handleProfileSave(newProfile);
   };
 
+  // Lógica principal de generación IA
   const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
     setIsPlanGenerating(true);
     try {
       const plan = await generateActionPlan(profileData, auditData, language);
       const fullStrategy = { ...plan, audit: auditData };
       setStrategy(fullStrategy);
+      // La estrategia se guarda automáticamente en `saveStrategySnapshot` dentro del servicio si fuera necesario,
+      // pero aquí lo mantenemos en memoria hasta que el usuario confirme o lo guardamos asíncronamente.
+      // *Nota: Para esta implementación, asumimos guardado implícito en services o al final.*
     } catch (err) {
-      console.error("Strategy Gen Error", err);
+      console.error("Error generando estrategia:", err);
     } finally {
       setIsPlanGenerating(false);
     }
@@ -212,14 +239,26 @@ export default function MainApp() {
   const handleProfileSave = async (profileData: UserProfile) => {
     if (!session?.user?.id) return;
 
-    setIsLoading(true);
-    setLoadingMessage('Generando estrategia directiva...');
+    setStatus('FETCHING_DB'); // Usamos loading screen
+    setLoadingMessage('Inicializando Director IA...');
     
     try {
+      // 1. Guardar Perfil (Persistencia Inmediata)
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
 
-      setLoadingMessage('El Director IA está analizando tu negocio...');
+      // 2. Generar Auditoría (Stream)
+      setStatus('READY'); // Liberamos pantalla para mostrar el Reporte cargando
+      setView('report'); 
+      // Nota: Pasamos a 'report' donde se mostrará el loading específico de auditoría
+      
+      // *Corrección UX*: Necesitamos generar el audit ANTES de mostrar el reporte completo
+      // o mostrar el reporte en modo "skeleton/loading".
+      // Para simplificar y robustez, generamos audit aquí con loading overlay:
+      
+      setStatus('FETCHING_DB');
+      setLoadingMessage('Analizando tu negocio...');
+      
       const generatedAudit = await generateAuditStream(profileData, language, (text) => {
         setStreamingLog(text);
       });
@@ -227,21 +266,24 @@ export default function MainApp() {
       setAudit(generatedAudit);
       setStreamingLog(''); 
       
+      // 3. Disparar Estrategia en background
       triggerStrategyGeneration(profileData, generatedAudit, business.id);
 
+      setStatus('READY');
       setView('report'); 
       
     } catch (e: any) {
       console.error(e);
+      setStatus('READY');
+      // Si falla, volvemos a una pantalla segura dependiendo de qué datos tenemos
       if (!businessId) setView('onboarding');
       else setView('dashboard'); 
-    } finally {
-      setIsLoading(false);
     }
   };
 
   const handleAuthSuccess = async () => {
-    window.location.reload();
+     // No hacemos nada manual. El listener onAuthStateChange se encargará.
+     console.log("Auth View reporta éxito.");
   };
   
   const handleTransitionComplete = () => {
@@ -253,8 +295,10 @@ export default function MainApp() {
       setView('roadmap');
       return;
     }
+    // Si el usuario hace click rápido y la IA sigue pensando:
     setIsWaitingForStrategy(true);
     if (!isPlanGenerating && profile && audit && businessId) {
+      // Retry si se detuvo
       triggerStrategyGeneration(profile, audit, businessId);
     }
   };
@@ -267,7 +311,7 @@ export default function MainApp() {
     if (!profile) return;
     if (weeklyPlan) { setView('weekly_agency'); return; }
 
-    setIsLoading(true);
+    setStatus('FETCHING_DB');
     setLoadingMessage(t('generating_week', language));
     try {
       const plan = await generateWeeklyAgencyPlan(profile, language);
@@ -275,31 +319,20 @@ export default function MainApp() {
       if (session?.user?.id && businessId) {
         await saveUserProgress(session.user.id, businessId, 'weekly', plan);
       }
+      setStatus('READY');
       setView('weekly_agency');
     } catch (e) {
       console.error(e);
+      setStatus('READY');
       setView('dashboard'); 
-    } finally {
-        setIsLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    try {
-        setIsLoading(true);
-        setLoadingMessage('Cerrando sesión...');
-        await signOut();
-        setSession(null);
-        setProfile(null);
-        setStrategy(null);
-        localStorage.clear(); 
-        setView('auth');
-    } catch (error) {
-        console.error("Logout failed", error);
-        setView('auth');
-    } finally {
-        setIsLoading(false);
-    }
+    setStatus('FETCHING_DB');
+    setLoadingMessage('Cerrando sesión de forma segura...');
+    await signOut();
+    // El listener onAuthStateChange limpiará el estado y pondrá view='auth'
   };
 
   const handleUpdateExecution = (stepIndex: number, data: Record<string, string>) => {
@@ -337,10 +370,25 @@ export default function MainApp() {
     return activeIndex === -1 ? 0 : activeIndex;
   };
 
-  // --- RENDER ---
+  // ---------------------------------------------------------------------------
+  // 5. RENDERIZADO (Máquina de Estados)
+  // ---------------------------------------------------------------------------
 
-  if (view === 'error') {
+  // PANTALLAS DE BLOQUEO (Loading / Error)
+  if (status === 'BOOTING' || status === 'CHECKING_SESSION' || status === 'FETCHING_DB') {
     return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950">
+         <Loading 
+            message={loadingMessage} 
+            subMessage={isPlanGenerating ? "Generando estrategia maestra..." : undefined}
+            streamLog={streamingLog}
+         />
+      </div>
+    );
+  }
+
+  if (status === 'ERROR') {
+     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
         <div className="glass-panel p-10 border-red-500/20 max-w-lg">
            <div className="text-5xl mb-4">🛠️</div>
@@ -352,25 +400,12 @@ export default function MainApp() {
     );
   }
 
-  // Priority to Loading Screen if explicit loading requested
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-         <Loading 
-            message={loadingMessage || (language === 'en' ? "Connecting..." : "Conectando...")} 
-            subMessage={isPlanGenerating ? "Generando estrategia maestra..." : undefined}
-            streamLog={streamingLog}
-         />
-      </div>
-    );
-  }
+  // PANTALLAS DE FLUJO PRINCIPAL (Solo cuando status === 'READY')
 
-  // Priority to Auth View
   if (view === 'auth') {
     return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
-  // Only renders if NOT loading and NOT auth
   if (view === 'transition') {
     return <TransitionScreen onComplete={handleTransitionComplete} />;
   }
@@ -398,7 +433,7 @@ export default function MainApp() {
     );
   }
 
-  // --- MAIN LAYOUT STRUCTURE ---
+  // Layout para vistas internas
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
@@ -453,7 +488,7 @@ export default function MainApp() {
     );
   }
 
-  // FALLBACK SAFEGUARD: If we get here, something is wrong with the state logic.
-  console.warn("⚠️ Invalid state reached. Redirecting to Auth.");
+  // Fallback de seguridad: Si llegamos aquí y no hay vista válida, volvemos a Auth.
+  console.warn("⚠️ Estado inalcanzable. Redirigiendo a Auth.");
   return <AuthView onSuccess={handleAuthSuccess} />;
 }

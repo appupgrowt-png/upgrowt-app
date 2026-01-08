@@ -27,10 +27,12 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     try {
       setIsLoading(true);
       setError('');
+      // Supabase manejará el redirect automáticamente. 
+      // MainApp detectará el cambio de sesión al volver.
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: window.location.origin 
         }
       });
       if (error) throw error;

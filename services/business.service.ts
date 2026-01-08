@@ -1,3 +1,4 @@
+
 import { supabase } from '../lib/supabase';
 import { UserProfile, ComprehensiveStrategy, ExecutionState, WeeklyAgencyPlan } from '../types';
 
@@ -10,7 +11,7 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
       business_name: profile.businessName,
       industry: profile.offering,
       stage: profile.businessAge,
-      profile_data: profile // Persist full JSON to ensure recovery
+      profile_data: profile // Guardamos todo el JSON para recuperar el estado
     }, { onConflict: 'user_id' })
     .select()
     .single();
@@ -34,47 +35,65 @@ export const saveStrategySnapshot = async (businessId: string, profile: UserProf
 
 // 3. Load Full Data (Used on Login)
 export const loadUserData = async (userId: string) => {
-  // A. Get Business
-  const { data: business, error: busError } = await supabase
-    .from('business_profiles')
-    .select('id, business_name, profile_data')
-    .eq('user_id', userId)
-    .single();
+  try {
+    // A. Obtener Business Profile
+    // Usamos maybeSingle() para que NO lance error si no existe, sino que devuelva null.
+    const { data: business, error: busError } = await supabase
+      .from('business_profiles')
+      .select('id, business_name, profile_data')
+      .eq('user_id', userId)
+      .maybeSingle(); 
 
-  if (busError || !business) return null;
+    if (busError) {
+       console.error("Error DB al cargar perfil:", busError);
+       return null; // Error real de DB
+    }
 
-  // B. Get Strategy
-  const { data: strategyData } = await supabase
-    .from('strategy_summary')
-    .select('strategy_snapshot')
-    .eq('business_id', business.id)
-    .single();
+    if (!business) {
+       // Usuario existe en Auth, pero no tiene Business Profile.
+       // Esto indica que es un USUARIO NUEVO que debe ir a Onboarding.
+       return { 
+         businessId: null, 
+         profile: null, 
+         strategy: null, 
+         executionState: {}, 
+         weeklyPlan: null 
+       };
+    }
 
-  // C. Get Progress (Execution & Weekly)
-  const { data: progressData } = await supabase
-    .from('user_progress')
-    .select('execution_state, weekly_state')
-    .eq('business_id', business.id)
-    .single();
+    // B. Obtener Strategy (si existe)
+    const { data: strategyData } = await supabase
+      .from('strategy_summary')
+      .select('strategy_snapshot')
+      .eq('business_id', business.id)
+      .maybeSingle();
 
-  // Resolve Profile: Prefer strategy snapshot (latest state), fallback to business profile_data
-  // This ensures that if strategy generation failed or wasn't saved, we still have the profile form data.
-  const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
+    // C. Obtener Progreso (Execution & Weekly)
+    const { data: progressData } = await supabase
+      .from('user_progress')
+      .select('execution_state, weekly_state')
+      .eq('business_id', business.id)
+      .maybeSingle();
 
-  return {
-    businessId: business.id,
-    profile: resolvedProfile,
-    strategy: strategyData?.strategy_snapshot?.strategy as ComprehensiveStrategy || null,
-    executionState: progressData?.execution_state || {},
-    weeklyPlan: progressData?.weekly_state || null
-  };
+    // Resolver el perfil más actualizado:
+    // Preferimos el del snapshot de estrategia si existe, si no, el del business profile.
+    const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
+
+    return {
+      businessId: business.id,
+      profile: resolvedProfile,
+      strategy: strategyData?.strategy_snapshot?.strategy as ComprehensiveStrategy || null,
+      executionState: progressData?.execution_state || {},
+      weeklyPlan: progressData?.weekly_state || null
+    };
+  } catch (error) {
+    console.error("Excepción inesperada en loadUserData:", error);
+    return null;
+  }
 };
 
 // 4. Update Progress (Granular Save)
 export const saveUserProgress = async (userId: string, businessId: string, type: 'execution' | 'weekly', data: any) => {
-  // We need to fetch current first to merge, or use upsert carefully. 
-  // For simplicity/performance in this MVP, we blindly upsert the specific column passed.
-  
   const updatePayload: any = {
     user_id: userId,
     business_id: businessId,
@@ -88,5 +107,5 @@ export const saveUserProgress = async (userId: string, businessId: string, type:
     .from('user_progress')
     .upsert(updatePayload, { onConflict: 'user_id' });
 
-  if (error) console.error("Error saving progress:", error);
+  if (error) console.error("Error guardando progreso:", error);
 };
