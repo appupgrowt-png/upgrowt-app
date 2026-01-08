@@ -11,7 +11,7 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
       business_name: profile.businessName,
       industry: profile.offering,
       stage: profile.businessAge,
-      profile_data: profile // Guardamos todo el JSON para recuperar el estado
+      profile_data: profile
     }, { onConflict: 'user_id' })
     .select()
     .single();
@@ -33,11 +33,20 @@ export const saveStrategySnapshot = async (businessId: string, profile: UserProf
   if (error) throw error;
 };
 
-// 3. Load Full Data (Used on Login)
+// 3. Load Full Data (Critical Function)
 export const loadUserData = async (userId: string) => {
   try {
+    // Check connection first
+    const { error: healthCheck } = await supabase.from('business_profiles').select('count', { count: 'exact', head: true });
+    if (healthCheck && healthCheck.code !== 'PGRST116') { // Ignore "no rows" error, worry about connection errors
+       console.warn("Health Check Warning:", healthCheck);
+       // If unauthorized, throw immediately to trigger auto-logout in MainApp
+       if (healthCheck.code === '401' || healthCheck.message?.includes('JWT')) {
+         throw new Error('AUTH_INVALID');
+       }
+    }
+
     // A. Obtener Business Profile
-    // Usamos maybeSingle() para que NO lance error si no existe, sino que devuelva null.
     const { data: business, error: busError } = await supabase
       .from('business_profiles')
       .select('id, business_name, profile_data')
@@ -45,13 +54,14 @@ export const loadUserData = async (userId: string) => {
       .maybeSingle(); 
 
     if (busError) {
-       console.error("Error DB al cargar perfil:", busError);
-       return null; // Error real de DB
+       console.error("Error cargando perfil de negocio:", busError.message);
+       // Si hay error de RLS o permiso, asumimos usuario nuevo o inválido
+       return null; 
     }
 
     if (!business) {
-       // Usuario existe en Auth, pero no tiene Business Profile.
-       // Esto indica que es un USUARIO NUEVO que debe ir a Onboarding.
+       // El usuario tiene Auth válido pero NO tiene perfil en DB.
+       // Retornamos objeto vacio para activar flujo de Onboarding.
        return { 
          businessId: null, 
          profile: null, 
@@ -75,8 +85,7 @@ export const loadUserData = async (userId: string) => {
       .eq('business_id', business.id)
       .maybeSingle();
 
-    // Resolver el perfil más actualizado:
-    // Preferimos el del snapshot de estrategia si existe, si no, el del business profile.
+    // Resolver el perfil más actualizado
     const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
 
     return {
@@ -86,13 +95,14 @@ export const loadUserData = async (userId: string) => {
       executionState: progressData?.execution_state || {},
       weeklyPlan: progressData?.weekly_state || null
     };
-  } catch (error) {
-    console.error("Excepción inesperada en loadUserData:", error);
+  } catch (error: any) {
+    console.error("Excepción en loadUserData:", error);
+    if (error.message === 'AUTH_INVALID') throw error; // Re-throw auth errors to force logout
     return null;
   }
 };
 
-// 4. Update Progress (Granular Save)
+// 4. Update Progress
 export const saveUserProgress = async (userId: string, businessId: string, type: 'execution' | 'weekly', data: any) => {
   const updatePayload: any = {
     user_id: userId,

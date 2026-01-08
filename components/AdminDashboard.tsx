@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState } from 'react';
 import { Button } from './ui/Button';
 
 // Added missing MetricCard component definition
@@ -19,31 +20,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
-  const [activeTab, setActiveTab] = useState<'metrics' | 'users' | 'debug'>('metrics');
-  const [localData, setLocalData] = useState<any>({});
-
-  // Load all local storage data for debugging
-  useEffect(() => {
-    const data: any = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('upgrowt_')) {
-        try {
-          data[key] = JSON.parse(localStorage.getItem(key) || '');
-        } catch (e) {
-          data[key] = localStorage.getItem(key);
-        }
-      }
-    }
-    setLocalData(data);
-  }, []);
-
-  const handleNuke = () => {
-    if (confirm('⚠️ PELIGRO: Esto borrará TODOS los datos locales y reiniciará la app. ¿Seguro?')) {
-      localStorage.clear();
-      window.location.reload();
-    }
-  };
+  const [activeTab, setActiveTab] = useState<'metrics' | 'users'>('metrics');
 
   return (
     <div className="min-h-screen bg-[#0b0c15] text-slate-300 font-sans">
@@ -60,9 +37,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
         </div>
         <div className="flex gap-3">
           <Button variant="ghost" onClick={onExit} className="text-xs">Volver a App</Button>
-          <Button variant="secondary" onClick={handleNuke} className="bg-red-900/20 text-red-400 border-red-500/30 hover:bg-red-900/40">
-            ☢️ Nuke Data
-          </Button>
         </div>
       </div>
 
@@ -80,12 +54,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
             className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'hover:bg-white/5'}`}
           >
             👥 Users (Mock)
-          </button>
-          <button 
-            onClick={() => setActiveTab('debug')}
-            className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'debug' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'hover:bg-white/5'}`}
-          >
-            🐞 Local Debugger
           </button>
         </div>
 
@@ -140,18 +108,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-
-          {activeTab === 'debug' && (
-            <div className="space-y-4 animate-fade-in">
-               <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400 text-sm">
-                 <p className="font-bold">⚠️ Debug Mode</p>
-                 <p>Raw view of localStorage keys for this app.</p>
-               </div>
-               <div className="bg-slate-950 p-4 rounded-xl border border-white/10 font-mono text-xs text-slate-400 overflow-x-auto">
-                 <pre>{JSON.stringify(localData, null, 2)}</pre>
-               </div>
             </div>
           )}
 

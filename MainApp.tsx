@@ -56,27 +56,28 @@ export default function MainApp() {
   // ---------------------------------------------------------------------------
   const syncUserData = useCallback(async (userId: string) => {
     setStatus('FETCHING_DB');
-    setLoadingMessage('Sincronizando base de datos...');
+    setLoadingMessage('Validando credenciales...');
     
     try {
       const data = await loadUserData(userId);
       
+      // Si loadUserData retorna null explícito o lanza error AUTH_INVALID
       if (!data) {
-        throw new Error("Error crítico al leer la base de datos.");
+        throw new Error("AUTH_SYNC_FAILED");
       }
 
-      // CASO A: Usuario Nuevo (Auth OK, DB vacía)
+      // CASO A: Usuario Nuevo (Auth OK, DB vacía) -> ONBOARDING
       if (!data.businessId || !data.profile) {
-        console.log("🆕 Usuario nuevo detectado -> Onboarding");
+        console.log("🆕 Usuario sin perfil -> Onboarding");
         setBusinessId(null);
         setProfile(null);
-        setView('transition'); // Animación de entrada -> Onboarding
+        setView('transition'); 
         setStatus('READY');
         return;
       }
 
-      // CASO B: Usuario Existente
-      console.log("✅ Usuario existente cargado:", data.profile.businessName);
+      // CASO B: Usuario Existente -> DASHBOARD
+      console.log("✅ Datos cargados correctamente");
       setBusinessId(data.businessId);
       setProfile(data.profile);
       
@@ -85,29 +86,29 @@ export default function MainApp() {
       if (data.executionState) setExecutionState(data.executionState);
       if (data.weeklyPlan) setWeeklyPlan(data.weeklyPlan as WeeklyAgencyPlan);
 
-      // Determinar Vista Basada en Progreso
+      // Routing
       if (data.strategy) {
          setStrategy(data.strategy);
          setAudit(data.strategy.audit);
-         
-         if (data.weeklyPlan) {
-           setView('weekly_agency');
-         } else {
-           setView('dashboard');
-         }
+         setView(data.weeklyPlan ? 'weekly_agency' : 'dashboard');
       } else {
-         // Edge Case: Perfil existe pero estrategia falló anteriormente
-         console.warn("⚠️ Perfil encontrado sin estrategia. Iniciando recuperación.");
+         console.warn("⚠️ Perfil sin estrategia. Recuperando...");
          setShouldRecoverStrategy(true);
-         // No cambiamos la vista aquí, dejamos que el Effect de recuperación actúe
       }
       
       setStatus('READY');
 
     } catch (err: any) {
-      console.error("❌ Database Sync Error:", err);
-      setAppError("No pudimos cargar tu información. Revisa tu conexión.");
-      setStatus('ERROR');
+      console.error("❌ Fallo en syncUserData:", err);
+      
+      // FALLO SEGURO: Si algo falla leyendo la DB, forzamos logout.
+      // Esto arregla el "Usuario Fantasma" (Token en local, Usuario borrado en DB)
+      console.log("♻️ Forzando limpieza de sesión por error de datos...");
+      await signOut();
+      setSession(null);
+      setStatus('READY');
+      setView('auth');
+      // Opcional: Mostrar notificación "Tu sesión expiró"
     }
   }, []);
 
@@ -131,10 +132,9 @@ export default function MainApp() {
       // B. Check Session
       setStatus('CHECKING_SESSION');
       
-      // Manejar OAuth Redirect (Hash en URL)
-      // Si hay hash, dejamos que el listener onAuthStateChange lo capture, no hacemos getSession manual
+      // Manejar OAuth Redirect
       if (window.location.hash && window.location.hash.includes('access_token')) {
-        console.log("🔄 OAuth Redirect detectado. Esperando listener...");
+        console.log("🔄 OAuth Redirect. Esperando listener...");
         return; 
       }
 
@@ -142,11 +142,11 @@ export default function MainApp() {
 
       if (mounted) {
         if (currentSession && !error) {
-           console.log("👤 Sesión activa encontrada.");
+           console.log("👤 Sesión detectada. Iniciando sync...");
            setSession(currentSession);
            await syncUserData(currentSession.user.id);
         } else {
-           console.log("🔒 No hay sesión. Mostrando Login.");
+           console.log("🔒 Sin sesión. Login.");
            setStatus('READY');
            setView('auth');
         }
@@ -155,14 +155,14 @@ export default function MainApp() {
 
     bootstrap();
 
-    // C. Auth Listener (Maneja Login, Logout y OAuth)
+    // C. Auth Listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
        console.log(`🔔 Auth Event: ${event}`);
        
        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (newSession) {
              setSession(newSession);
-             // Solo cargamos datos si no estamos ya en ello para evitar doble fetch
+             // Solo sync si no estamos ya en ello (evita bucles)
              if (status !== 'FETCHING_DB') {
                 await syncUserData(newSession.user.id);
              }
@@ -181,22 +181,21 @@ export default function MainApp() {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [syncUserData]); // syncUserData es estable por useCallback
+  }, [syncUserData]);
 
   // ---------------------------------------------------------------------------
   // 3. AUTO-RECUPERACIÓN Y NAVEGACIÓN
   // ---------------------------------------------------------------------------
 
-  // Recuperar estrategia si falta (Caso "Limbo")
+  // Recuperar estrategia
   useEffect(() => {
     if (shouldRecoverStrategy && profile && session && status === 'READY') {
-      console.log("🚑 Ejecutando recuperación de estrategia...");
       setShouldRecoverStrategy(false);
-      handleProfileSave(profile); // Re-inicia el proceso de generación
+      handleProfileSave(profile);
     }
   }, [shouldRecoverStrategy, profile, session, status]);
 
-  // Navegar al roadmap cuando la estrategia esté lista
+  // Navegar al roadmap
   useEffect(() => {
     if (isWaitingForStrategy && strategy) {
       setIsWaitingForStrategy(false);
@@ -206,7 +205,7 @@ export default function MainApp() {
 
 
   // ---------------------------------------------------------------------------
-  // 4. HANDLERS DE ACCIÓN
+  // 4. HANDLERS
   // ---------------------------------------------------------------------------
 
   const handleLanguageChange = (lang: Language) => {
@@ -219,16 +218,12 @@ export default function MainApp() {
     handleProfileSave(newProfile);
   };
 
-  // Lógica principal de generación IA
   const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
     setIsPlanGenerating(true);
     try {
       const plan = await generateActionPlan(profileData, auditData, language);
       const fullStrategy = { ...plan, audit: auditData };
       setStrategy(fullStrategy);
-      // La estrategia se guarda automáticamente en `saveStrategySnapshot` dentro del servicio si fuera necesario,
-      // pero aquí lo mantenemos en memoria hasta que el usuario confirme o lo guardamos asíncronamente.
-      // *Nota: Para esta implementación, asumimos guardado implícito en services o al final.*
     } catch (err) {
       console.error("Error generando estrategia:", err);
     } finally {
@@ -239,25 +234,18 @@ export default function MainApp() {
   const handleProfileSave = async (profileData: UserProfile) => {
     if (!session?.user?.id) return;
 
-    setStatus('FETCHING_DB'); // Usamos loading screen
-    setLoadingMessage('Inicializando Director IA...');
+    setStatus('FETCHING_DB');
+    setLoadingMessage('Guardando perfil...');
     
     try {
-      // 1. Guardar Perfil (Persistencia Inmediata)
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
 
-      // 2. Generar Auditoría (Stream)
-      setStatus('READY'); // Liberamos pantalla para mostrar el Reporte cargando
+      setStatus('READY');
       setView('report'); 
-      // Nota: Pasamos a 'report' donde se mostrará el loading específico de auditoría
-      
-      // *Corrección UX*: Necesitamos generar el audit ANTES de mostrar el reporte completo
-      // o mostrar el reporte en modo "skeleton/loading".
-      // Para simplificar y robustez, generamos audit aquí con loading overlay:
       
       setStatus('FETCHING_DB');
-      setLoadingMessage('Analizando tu negocio...');
+      setLoadingMessage('Analizando negocio...');
       
       const generatedAudit = await generateAuditStream(profileData, language, (text) => {
         setStreamingLog(text);
@@ -266,7 +254,6 @@ export default function MainApp() {
       setAudit(generatedAudit);
       setStreamingLog(''); 
       
-      // 3. Disparar Estrategia en background
       triggerStrategyGeneration(profileData, generatedAudit, business.id);
 
       setStatus('READY');
@@ -275,15 +262,13 @@ export default function MainApp() {
     } catch (e: any) {
       console.error(e);
       setStatus('READY');
-      // Si falla, volvemos a una pantalla segura dependiendo de qué datos tenemos
       if (!businessId) setView('onboarding');
       else setView('dashboard'); 
     }
   };
 
   const handleAuthSuccess = async () => {
-     // No hacemos nada manual. El listener onAuthStateChange se encargará.
-     console.log("Auth View reporta éxito.");
+     // Listener handles it
   };
   
   const handleTransitionComplete = () => {
@@ -295,10 +280,8 @@ export default function MainApp() {
       setView('roadmap');
       return;
     }
-    // Si el usuario hace click rápido y la IA sigue pensando:
     setIsWaitingForStrategy(true);
     if (!isPlanGenerating && profile && audit && businessId) {
-      // Retry si se detuvo
       triggerStrategyGeneration(profile, audit, businessId);
     }
   };
@@ -330,9 +313,9 @@ export default function MainApp() {
 
   const handleLogout = async () => {
     setStatus('FETCHING_DB');
-    setLoadingMessage('Cerrando sesión de forma segura...');
+    setLoadingMessage('Cerrando sesión...');
     await signOut();
-    // El listener onAuthStateChange limpiará el estado y pondrá view='auth'
+    // Auth listener will reset state
   };
 
   const handleUpdateExecution = (stepIndex: number, data: Record<string, string>) => {
@@ -371,10 +354,9 @@ export default function MainApp() {
   };
 
   // ---------------------------------------------------------------------------
-  // 5. RENDERIZADO (Máquina de Estados)
+  // 5. RENDERIZADO
   // ---------------------------------------------------------------------------
 
-  // PANTALLAS DE BLOQUEO (Loading / Error)
   if (status === 'BOOTING' || status === 'CHECKING_SESSION' || status === 'FETCHING_DB') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -392,15 +374,19 @@ export default function MainApp() {
       <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
         <div className="glass-panel p-10 border-red-500/20 max-w-lg">
            <div className="text-5xl mb-4">🛠️</div>
-           <h2 className="text-2xl font-bold text-white mb-2">Error de Sistema</h2>
-           <p className="text-slate-400 mb-6">{appError || "Ha ocurrido un error inesperado."}</p>
-           <Button onClick={() => window.location.reload()}>Recargar Aplicación</Button>
+           <h2 className="text-2xl font-bold text-white mb-2">Problema de Conexión</h2>
+           <p className="text-slate-400 mb-6">{appError || "Hubo un error al cargar tus datos. Es posible que tu sesión haya expirado."}</p>
+           <Button onClick={() => {
+              signOut().then(() => window.location.reload());
+           }}>
+             Cerrar Sesión y Reintentar
+           </Button>
         </div>
       </div>
     );
   }
 
-  // PANTALLAS DE FLUJO PRINCIPAL (Solo cuando status === 'READY')
+  // --- VISTAS ---
 
   if (view === 'auth') {
     return <AuthView onSuccess={handleAuthSuccess} />;
@@ -433,7 +419,6 @@ export default function MainApp() {
     );
   }
 
-  // Layout para vistas internas
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
@@ -488,7 +473,6 @@ export default function MainApp() {
     );
   }
 
-  // Fallback de seguridad: Si llegamos aquí y no hay vista válida, volvemos a Auth.
   console.warn("⚠️ Estado inalcanzable. Redirigiendo a Auth.");
   return <AuthView onSuccess={handleAuthSuccess} />;
 }
