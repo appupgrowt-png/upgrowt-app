@@ -1,9 +1,19 @@
-import React, { useEffect, useRef } from 'react';
 
-export const Loading: React.FC<{ message?: string; subMessage?: string; streamLog?: string }> = ({ 
+import React, { useEffect, useRef } from 'react';
+import { Button } from './Button';
+
+export const Loading: React.FC<{ 
+  message?: string; 
+  subMessage?: string; 
+  streamLog?: string;
+  onReset?: () => void;
+  showReset?: boolean;
+}> = ({ 
   message = "Analizando estrategia...", 
   subMessage,
-  streamLog
+  streamLog,
+  onReset,
+  showReset = false
 }) => {
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -15,7 +25,7 @@ export const Loading: React.FC<{ message?: string; subMessage?: string; streamLo
   }, [streamLog]);
 
   return (
-    <div className="flex flex-col items-center justify-center p-8 space-y-8 w-full max-w-2xl mx-auto">
+    <div className="flex flex-col items-center justify-center p-8 space-y-8 w-full max-w-2xl mx-auto animate-fade-in">
       <div className="relative w-24 h-24">
         {/* Outer Glow */}
         <div className="absolute top-0 left-0 w-full h-full rounded-full bg-primary-500/20 blur-xl animate-pulse-slow"></div>
@@ -27,9 +37,18 @@ export const Loading: React.FC<{ message?: string; subMessage?: string; streamLo
         <div className="absolute top-1/2 left-1/2 w-3 h-3 bg-primary-400 rounded-full transform -translate-x-1/2 -translate-y-1/2 shadow-[0_0_15px_#22d3ee]"></div>
       </div>
       
-      <div className="text-center space-y-2 w-full">
+      <div className="text-center space-y-4 w-full">
         <p className="text-white font-bold text-lg animate-pulse tracking-widest uppercase">{message}</p>
         {subMessage && <p className="text-slate-500 text-sm">{subMessage}</p>}
+        
+        {showReset && onReset && (
+          <div className="pt-4 animate-fade-in-up">
+            <p className="text-red-400 text-xs mb-3">¿Tarda demasiado? Es posible que la conexión sea lenta.</p>
+            <Button onClick={onReset} variant="secondary" className="text-xs px-4 py-2 h-auto">
+              Recargar / Reiniciar Sesión
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Streaming Log (Matrix Effect) */}

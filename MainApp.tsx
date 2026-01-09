@@ -21,15 +21,12 @@ import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionS
 import { t } from './utils/i18n';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 
-// ESTADOS DEL SISTEMA
 type ViewState = 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'loading' | 'error';
 
 export default function MainApp() {
-  // --- STATE: CORE ---
   const [view, setView] = useState<ViewState>('loading');
   const [appError, setAppError] = useState<string | null>(null);
   
-  // --- STATE: DATA ---
   const [session, setSession] = useState<any>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -38,41 +35,83 @@ export default function MainApp() {
   const [executionState, setExecutionState] = useState<ExecutionState>({});
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyAgencyPlan | null>(null);
 
-  // --- STATE: UI ---
-  const [loadingMessage, setLoadingMessage] = useState<string>('Iniciando sistema...');
+  const [loadingMessage, setLoadingMessage] = useState<string>('Conectando con el servidor...');
   const [streamingLog, setStreamingLog] = useState<string>('');
   const [language, setLanguage] = useState<Language>('es');
   const [sidebarAction, setSidebarAction] = useState<string>('');
+  const [showSlowLoading, setShowSlowLoading] = useState(false);
 
-  // --- STATE: GENERATION PROCESS ---
   const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
   const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
 
-  // Ref para evitar loops de carga
   const isFetchingRef = useRef(false);
 
-  // ---------------------------------------------------------------------------
-  // 1. GESTIÓN DE SESIÓN (FUENTE DE VERDAD)
-  // ---------------------------------------------------------------------------
+  // --- EFFECT: DETECT SLOW LOADING (COLD START HANDLING) ---
   useEffect(() => {
-    // A. Check Configuración
+    let timer: ReturnType<typeof setTimeout>;
+    let wakeUpTimer: ReturnType<typeof setTimeout>;
+
+    if (view === 'loading') {
+      // 1. Mensaje de "Despertando" a los 4 segundos
+      wakeUpTimer = setTimeout(() => {
+        setLoadingMessage('Despertando base de datos (esto puede tardar unos segundos)...');
+      }, 4000);
+
+      // 2. Botón de reinicio a los 15 segundos (Damos tiempo para el Cold Start que suele ser ~10s)
+      timer = setTimeout(() => {
+        console.warn("⏳ Loading is taking longer than expected...");
+        setShowSlowLoading(true);
+        setLoadingMessage('El servidor está tardando más de lo normal...');
+      }, 15000);
+    } else {
+      setShowSlowLoading(false);
+    }
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(wakeUpTimer);
+    };
+  }, [view]);
+
+  // --- 1. SESSION MANAGEMENT ---
+  useEffect(() => {
+    // Immediate configuration check
     if (!isSupabaseConfigured()) {
       setView('auth');
       return;
     }
 
-    // B. Obtener sesión inicial
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
-      setSession(initialSession);
-      if (!initialSession) setView('auth');
-    });
+    // Initialize Session Check
+    const initSession = async () => {
+      try {
+        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+           console.error("Session Init Error:", error);
+           setView('auth');
+           return;
+        }
 
-    // C. Escuchar cambios de autenticación
+        if (initialSession) {
+          setSession(initialSession);
+          // Sync logic handleará el resto
+        } else {
+          // No hay sesión, vamos al login
+          setView('auth');
+        }
+      } catch (e) {
+        console.error("Unexpected Session Error:", e);
+        setView('auth');
+      }
+    };
+
+    initSession();
+
+    // Listen for Auth Changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       if (!newSession) {
-        // Limpieza completa al cerrar sesión
+        // Full reset on logout
         setBusinessId(null);
         setProfile(null);
         setStrategy(null);
@@ -81,75 +120,70 @@ export default function MainApp() {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // 2. SINCRONIZACIÓN DE DATOS (REACTIVA A LA SESIÓN)
-  // ---------------------------------------------------------------------------
+  // --- 2. DATA SYNC ---
   useEffect(() => {
     const syncData = async () => {
-      // Solo sincronizar si hay usuario, no estamos cargando ya, y no tenemos datos aún
+      // Only sync if we have a user, we aren't already syncing, and we haven't loaded data yet
       if (!session?.user?.id || isFetchingRef.current || businessId) return;
 
       isFetchingRef.current = true;
       setView('loading');
-      setLoadingMessage('Validando credenciales...');
-
-      // TIMEOUT DE SEGURIDAD
-      const timeoutId = setTimeout(() => {
-        if (isFetchingRef.current) {
-          console.error("⏰ Timeout de carga de datos.");
-          handleForcedLogout("El servidor tardó demasiado en responder.");
-        }
-      }, 15000);
+      setLoadingMessage('Sincronizando perfil...');
+      setShowSlowLoading(false);
 
       try {
-        // Uso explícito del tipo UserData para ayudar a TypeScript
+        console.log("🔄 Starting data load for user:", session.user.id);
         const data: UserData | null = await loadUserData(session.user.id);
-        clearTimeout(timeoutId);
-
+        
         if (!data) {
            throw new Error("AUTH_SYNC_FAILED");
         }
 
-        // Extracción segura para evitar errores de tipo 'never'
         const { businessId: bId, profile: uProfile, strategy: uStrategy, weeklyPlan: uPlan } = data;
 
-        // CASO A: Usuario Nuevo (Auth OK, DB vacía o incompleta) -> ONBOARDING
+        // New User -> Onboarding
         if (!bId || !uProfile) {
-          console.log("🆕 Usuario nuevo -> Onboarding");
+          console.log("🆕 New User Detected");
           setView('transition'); 
           isFetchingRef.current = false;
           return;
         }
 
-        // CASO B: Usuario Existente -> DASHBOARD
-        console.log("✅ Datos cargados:", uProfile.businessName);
+        // Existing User -> Dashboard
+        console.log("✅ Data Loaded Successfully");
         setBusinessId(bId);
         setProfile(uProfile);
         
-        // Restaurar estado
         if (uProfile.language) setLanguage(uProfile.language);
         if (data.executionState) setExecutionState(data.executionState);
         if (uPlan) setWeeklyPlan(uPlan);
 
-        // Routing Inteligente
         if (uStrategy) {
            setStrategy(uStrategy);
            setAudit(uStrategy.audit);
            setView(uPlan ? 'weekly_agency' : 'dashboard');
         } else {
-           // Perfil existe pero sin estrategia (error previo o interrupción)
+           console.log("⚠️ Profile found but no strategy. Attempting recovery.");
            setShouldRecoverStrategy(true);
-           // Si tenemos perfil, vamos al dashboard en modo limitado/recuperación
            setView('dashboard'); 
         }
 
       } catch (err: any) {
-        clearTimeout(timeoutId);
-        console.error("❌ Error Sync:", err);
-        handleForcedLogout("No pudimos sincronizar tu cuenta. Por favor reingresa.");
+        console.error("❌ Sync Error:", err);
+        // Si falla la sincronización, no forzamos logout inmediatamente, dejamos que el usuario decida
+        // o reintentamos
+        setLoadingMessage('Error al cargar datos. Reintentando...');
+        setTimeout(() => {
+           // Si falla repetidamente, mostramos error
+           if (isFetchingRef.current) {
+              handleForcedLogout("Error de conexión. Por favor reingresa.");
+           }
+        }, 5000);
       } finally {
         isFetchingRef.current = false;
       }
@@ -159,24 +193,31 @@ export default function MainApp() {
   }, [session, businessId]); 
 
   const handleForcedLogout = async (msg?: string) => {
-    console.log("⚠️ Ejecutando Logout Forzado");
+    console.log("🛑 Forced Logout Triggered:", msg);
+    // 1. Reset local state immediately to unblock UI
     setAppError(msg || null);
-    await signOut();
     isFetchingRef.current = false;
+    
+    // 2. Try to sign out from Supabase (don't await indefinitely)
+    signOut().catch(e => console.error("SignOut error:", e));
+    
+    // 3. Force view to auth
+    setSession(null); 
+    setView('auth');
   };
 
-  // ---------------------------------------------------------------------------
-  // 3. AUTO-RECUPERACIÓN
-  // ---------------------------------------------------------------------------
+  const handleResetApp = () => {
+    window.location.reload();
+  };
+
+  // --- 3. RECOVERY & GENERATION LOGIC ---
   useEffect(() => {
     if (shouldRecoverStrategy && profile && session && !isPlanGenerating) {
-      console.log("🚑 Recuperando estrategia perdida...");
       setShouldRecoverStrategy(false);
       handleProfileSave(profile);
     }
   }, [shouldRecoverStrategy, profile, session]);
 
-  // Navegación automática cuando la estrategia llega
   useEffect(() => {
     if (isWaitingForStrategy && strategy) {
       setIsWaitingForStrategy(false);
@@ -185,10 +226,7 @@ export default function MainApp() {
   }, [strategy, isWaitingForStrategy]);
 
 
-  // ---------------------------------------------------------------------------
-  // 4. ACCIONES DE USUARIO
-  // ---------------------------------------------------------------------------
-
+  // --- HANDLERS ---
   const handleLanguageChange = (lang: Language) => {
     setLanguage(lang);
     if (profile) setProfile({ ...profile, language: lang });
@@ -206,7 +244,7 @@ export default function MainApp() {
       const fullStrategy = { ...plan, audit: auditData };
       setStrategy(fullStrategy);
     } catch (err) {
-      console.error("Error generando estrategia:", err);
+      console.error("Error generating strategy:", err);
     } finally {
       setIsPlanGenerating(false);
     }
@@ -216,16 +254,13 @@ export default function MainApp() {
     if (!session?.user?.id) return;
 
     setView('loading');
-    setLoadingMessage('Guardando tu perfil...');
+    setLoadingMessage('Guardando perfil y generando análisis...');
     
     try {
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
-
-      // UI update inmediata para feedback
-      setLoadingMessage('Analizando tu negocio...');
       
-      // Pasar a vista reporte mientras carga el stream
+      // Move to report view immediately to show progress
       setView('report'); 
 
       const generatedAudit = await generateAuditStream(profileData, language, (text) => {
@@ -234,20 +269,20 @@ export default function MainApp() {
       
       setAudit(generatedAudit);
       setStreamingLog(''); 
-      
-      // Iniciar generación de estrategia en segundo plano
       triggerStrategyGeneration(profileData, generatedAudit, business.id);
       
     } catch (e: any) {
-      console.error(e);
-      // Si falla, intentamos salvar al usuario llevándolo a un lugar seguro
+      console.error("Save Profile Error:", e);
       if (businessId) setView('dashboard');
-      else setView('onboarding');
+      else {
+        setAppError("Error guardando el perfil. Intenta de nuevo.");
+        setView('onboarding');
+      }
     }
   };
 
   const handleAuthSuccess = async () => {
-     // El useEffect de 'session' manejará la transición.
+     // Session update triggers the syncData effect
   };
   
   const handleTransitionComplete = () => {
@@ -291,7 +326,7 @@ export default function MainApp() {
   const handleLogout = async () => {
     setView('loading');
     setLoadingMessage('Cerrando sesión...');
-    await signOut();
+    await handleForcedLogout();
   };
 
   const handleUpdateExecution = (stepIndex: number, data: Record<string, string>) => {
@@ -329,9 +364,7 @@ export default function MainApp() {
     return activeIndex === -1 ? 0 : activeIndex;
   };
 
-  // ---------------------------------------------------------------------------
-  // 5. RENDERIZADO DE VISTAS
-  // ---------------------------------------------------------------------------
+  // --- RENDER ---
 
   if (view === 'error') {
      return (
@@ -340,7 +373,10 @@ export default function MainApp() {
            <div className="text-5xl mb-4">🔌</div>
            <h2 className="text-2xl font-bold text-white mb-2">Conexión Interrumpida</h2>
            <p className="text-slate-400 mb-6">{appError || "Ocurrió un error inesperado al cargar tus datos."}</p>
-           <Button onClick={() => window.location.reload()}>Reintentar</Button>
+           <Button onClick={() => window.location.reload()}>Reintentar Conexión</Button>
+           <button onClick={() => handleForcedLogout()} className="block mx-auto mt-4 text-slate-500 text-xs hover:text-white underline">
+             Cerrar Sesión y Salir
+           </button>
         </div>
       </div>
     );
@@ -353,25 +389,22 @@ export default function MainApp() {
             message={loadingMessage} 
             subMessage={isPlanGenerating ? "Generando estrategia maestra..." : undefined}
             streamLog={streamingLog}
+            showReset={showSlowLoading}
+            onReset={handleForcedLogout}
          />
       </div>
     );
   }
 
-  if (view === 'auth') {
-    return <AuthView onSuccess={handleAuthSuccess} />;
-  }
-
-  if (view === 'transition') {
-    return <TransitionScreen onComplete={handleTransitionComplete} />;
-  }
-
+  if (view === 'auth') return <AuthView onSuccess={handleAuthSuccess} />;
+  if (view === 'transition') return <TransitionScreen onComplete={handleTransitionComplete} />;
+  
   if (view === 'onboarding') {
     return (
       <>
         <LanguageSwitcher currentLang={language} onToggle={handleLanguageChange} />
         <div className="absolute top-6 left-6 z-50">
-           <button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white">Salir</button>
+           <button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white transition-colors">Salir</button>
         </div>
         <Onboarding onComplete={handleOnboardingComplete} />
       </>
@@ -389,7 +422,6 @@ export default function MainApp() {
     );
   }
 
-  // --- MAIN APP LAYOUT ---
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
@@ -400,13 +432,11 @@ export default function MainApp() {
         lang={language} 
         currentPhaseIndex={getCurrentPhaseIndex()} 
       />
-      
       <main className="flex-1 md:ml-72 relative min-h-screen transition-all duration-300">
          <div className="md:hidden flex justify-between items-center p-6 border-b border-white/5">
             <span className="text-white font-bold">upGrowt</span>
             <button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button>
          </div>
-
          <div className="w-full max-w-7xl mx-auto p-4 md:p-8 lg:p-12">
             {children}
          </div>
@@ -423,9 +453,7 @@ export default function MainApp() {
   }
 
   if (view === 'wow' && strategy) return <WowMoment focus={strategy.priorityFocus} onContinue={handleWowContinue} />;
-  
   if (view === 'completion') return <CompletionSuccess onNext={handleEnterWeeklyMode} lang={language} />;
-  
   if (view === 'pricing') return <Pricing onBack={() => setView(weeklyPlan ? 'weekly_agency' : 'dashboard')} />;
 
   if (view === 'weekly_agency' && profile && weeklyPlan && strategy) {
@@ -444,6 +472,5 @@ export default function MainApp() {
     );
   }
 
-  // Fallback final por si algo escapa a la lógica
   return <AuthView onSuccess={handleAuthSuccess} />;
 }
