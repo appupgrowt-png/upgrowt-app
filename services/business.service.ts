@@ -11,7 +11,7 @@ export interface UserData {
   weeklyPlan: WeeklyAgencyPlan | null;
 }
 
-// 1. Save Profile Only
+// 1. Save Profile Only (Full Save)
 export const saveBusinessProfile = async (userId: string, profile: UserProfile) => {
   const { data, error } = await supabase
     .from('business_profiles')
@@ -27,6 +27,31 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
 
   if (error) throw error;
   return data;
+};
+
+// 1.5 Save Partial Onboarding Progress (Step-by-Step)
+export const updateOnboardingProgress = async (userId: string, partialProfile: Partial<UserProfile>) => {
+  // First, verify if a profile exists to merge, or just upsert the json
+  // We use business_name as a fallback if not provided in partial, or empty string
+  
+  const { error } = await supabase
+    .from('business_profiles')
+    .upsert({
+      user_id: userId,
+      // We update the JSONb column. Supabase merges top-level keys automatically if configured, 
+      // but 'upsert' replaces the row. 
+      // To simulate a merge, we normally fetch first, but for MVP speed we will upsert.
+      // NOTE: In a real app, you might want to fetch current profile first or use a postgres function for deep merge.
+      // Here we assume partialProfile contains the accumulator of all steps so far.
+      profile_data: partialProfile, 
+      business_name: partialProfile.businessName || 'Draft Business',
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' });
+
+  if (error) {
+    console.error("Error saving partial progress:", error);
+    // Don't throw, just log. We don't want to block the user flow if autosave fails temporarily.
+  }
 };
 
 // 2. Save Strategy (Fixed & Exported)

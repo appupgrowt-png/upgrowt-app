@@ -1,15 +1,18 @@
+
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface TransitionScreenProps {
   onComplete: () => void;
+  userEmail?: string;
+  onLogout?: () => void;
 }
 
-export const TransitionScreen: React.FC<TransitionScreenProps> = ({ onComplete }) => {
+export const TransitionScreen: React.FC<TransitionScreenProps> = ({ onComplete, userEmail, onLogout }) => {
   const [step, setStep] = useState(0);
   
   const messages = [
-    "Conectando con tu cuenta...",
+    `Bienvenido, ${userEmail || 'usuario'}`,
     "Analizando tu forma de trabajar...",
     "Preparando tu dirección estratégica...",
     "Todo listo."
@@ -35,7 +38,7 @@ export const TransitionScreen: React.FC<TransitionScreenProps> = ({ onComplete }
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-primary-600/5 rounded-full blur-[120px] animate-pulse-slow"></div>
       </div>
 
-      <div className="relative z-10 flex flex-col items-center">
+      <div className="relative z-10 flex flex-col items-center w-full max-w-md">
         
         {/* Logo Pulse (Icon Only) */}
         <motion.div 
@@ -53,7 +56,7 @@ export const TransitionScreen: React.FC<TransitionScreenProps> = ({ onComplete }
         </motion.div>
 
         {/* Dynamic Text */}
-        <div className="h-12 flex items-center justify-center overflow-hidden w-full max-w-lg text-center">
+        <div className="h-12 flex items-center justify-center overflow-hidden w-full text-center">
           <AnimatePresence mode="wait">
             <motion.p
               key={step}
@@ -76,6 +79,16 @@ export const TransitionScreen: React.FC<TransitionScreenProps> = ({ onComplete }
              animate={{ width: "100%" }}
              transition={{ duration: 7, ease: "easeInOut" }}
            />
+        </div>
+
+        {/* Logout Option */}
+        <div className="mt-12 opacity-0 animate-fade-in delay-[2000ms]">
+          <button 
+            onClick={onLogout}
+            className="text-xs text-slate-500 hover:text-white underline decoration-slate-700 hover:decoration-white transition-all"
+          >
+            ¿No eres tú? Cerrar Sesión
+          </button>
         </div>
 
       </div>

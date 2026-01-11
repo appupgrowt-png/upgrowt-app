@@ -84,7 +84,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
           <h2 className="text-2xl font-bold text-white mb-3">Revisa tu correo</h2>
           <p className="text-slate-400 text-sm leading-relaxed mb-8">
             Hemos enviado un enlace mágico a <span className="text-white font-medium">{email}</span>.<br/>
-            Haz clic en el enlace para entrar.
+            Haz clic en el enlace para entrar y guardar tu progreso.
           </p>
           <button 
             onClick={() => setEmailSent(false)}
@@ -127,10 +127,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
             />
           </motion.div>
           
-          <h1 className="text-2xl font-bold text-white mb-2 tracking-tight text-center">Bienvenido de nuevo</h1>
+          <h1 className="text-2xl font-bold text-white mb-2 tracking-tight text-center">Identifícate Primero</h1>
           <p className="text-slate-400 text-center text-sm leading-relaxed max-w-[280px]">
-            Tu negocio no necesita más ideas.<br/>
-            <span className="text-white font-medium">Necesita dirección.</span>
+            Para que el director IA pueda guardar tu estrategia <span className="text-white font-medium">paso a paso</span>.
           </p>
         </div>
 
@@ -208,7 +207,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
         {/* Footer */}
         <div className="mt-8 text-center">
            <p className="text-[10px] text-slate-600 font-medium tracking-wide">
-             SIN SPAM. SIN HUMO. DIRECCIÓN REAL.
+             TUS DATOS SE GUARDAN AUTOMÁTICAMENTE
            </p>
         </div>
 

@@ -4,13 +4,15 @@ import { UserProfile, Tone } from '../types';
 import { Button } from './ui/Button';
 import { generateCoreMessage } from '../services/geminiService';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Check } from 'lucide-react';
+import { ArrowRight, Check, Save } from 'lucide-react';
 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
+  onStepSave?: (partialData: any) => Promise<void>;
+  initialData?: UserProfile | null; // NEW PROP
 }
 
-// --- CONSTANTS & OPTIONS (Keeping existing logic) ---
+// --- CONSTANTS & OPTIONS ---
 const BUSINESS_AGES = ['Estoy empezando', 'Menos de 1 año', '1–3 años', '3–5 años', 'Más de 5 años'];
 const ACQUISITION_CHANNELS = ['Instagram', 'Facebook', 'TikTok', 'WhatsApp', 'Recomendaciones', 'Página web', 'Otro'];
 const SALES_FRICTIONS = ['Preguntan precio y desaparecen', 'Preguntan mucho antes de decidir', 'Compran rápido', 'Comparan con otros', 'Aún no recibo muchos mensajes'];
@@ -94,29 +96,53 @@ const RotatingText = () => {
   );
 };
 
-export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
+export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onStepSave, initialData }) => {
   const [step, setStep] = useState(0); // 0 = Intro, 1-6 = Blocks, 7 = Loading
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState({
-    businessName: '',
-    description: '',
-    businessAge: '',
-    acquisitionChannels: [] as string[],
-    salesFriction: '',
-    clientType: '',
-    clientDefinition: '',
-    clientPainPoints: [] as string[],
-    whyChosen: [] as string[],
-    antiPersona: [] as string[],
-    goals: [] as string[],
-    marketingFrustrations: [] as string[],
-    links: { instagram: '', facebook: '', tiktok: '', website: '', other: '' }
-  });
+  // Initialize form with saved data if available
+  const [formData, setFormData] = useState(() => ({
+    businessName: initialData?.businessName || '',
+    description: initialData?.description || '',
+    businessAge: initialData?.businessAge || '',
+    acquisitionChannels: initialData?.acquisitionChannels || [] as string[],
+    salesFriction: initialData?.salesFriction || '',
+    clientType: initialData?.clientType || '',
+    clientDefinition: initialData?.clientDefinition || '',
+    // Use 'painPoints' to match UserProfile type. Fallback to legacy 'clientPainPoints' from JSON if needed.
+    painPoints: initialData?.painPoints || (initialData as any)?.clientPainPoints || [] as string[],
+    whyChosen: initialData?.whyChosen || [] as string[],
+    antiPersona: initialData?.antiPersona || [] as string[],
+    goals: initialData?.goals as string[] || [] as string[],
+    marketingFrustrations: initialData?.marketingFrustrations || [] as string[],
+    links: initialData?.links || { instagram: '', facebook: '', tiktok: '', website: '', other: '' }
+  }));
 
-  const handleNext = () => {
+  // Auto-advance step if data is partially filled (Optional: skipped for now to let user review)
+  useEffect(() => {
+     if (initialData && step === 0 && initialData.businessName) {
+        // We could jump to last step, but for UX let them start from welcome or step 1
+        // setStep(1); 
+     }
+  }, [initialData]);
+
+  const handleNext = async () => {
     if (step === 1 && (!formData.businessName || !formData.description)) return;
+    
+    // Save step progress
+    if (onStepSave) {
+      setIsSaving(true);
+      try {
+        await onStepSave(formData);
+      } catch (e) {
+        console.error("Autosave failed", e);
+      } finally {
+        setIsSaving(false);
+      }
+    }
+
     setStep(s => s + 1);
     window.scrollTo(0, 0);
   };
@@ -142,13 +168,18 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   };
 
   const handleFinalSubmit = async () => {
+    // Final save before processing
+    if (onStepSave) {
+        try { await onStepSave(formData); } catch (e) {}
+    }
+
     setStep(7); // Loading View
     setIsLoading(true);
     setError(null);
 
     try {
       const strengthString = formData.whyChosen.join(', ') || "Servicio de calidad";
-      const problemString = formData.clientPainPoints.join(', ') || "Necesidad general";
+      const problemString = formData.painPoints.join(', ') || "Necesidad general";
       
       const coreMessageData = await generateCoreMessage(
         formData.businessName, 
@@ -169,7 +200,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         clientType: formData.clientType,
         clientDefinition: formData.clientDefinition,
         targetAudience: formData.clientDefinition ? formData.clientDefinition : `Clientes tipo: ${formData.clientType}`,
-        painPoints: formData.clientPainPoints,
+        painPoints: formData.painPoints,
         marketingFrustrations: formData.marketingFrustrations,
         goals: formData.goals,
         antiPersona: formData.antiPersona,
@@ -183,7 +214,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         isConfigured: true,
         language: 'es',
         coreMessage: coreMessageData.message,
-        solvedProblem: formData.clientPainPoints[0] || "Resolver problemas",
+        solvedProblem: formData.painPoints[0] || "Resolver problemas",
       };
 
       onComplete(fullProfile);
@@ -195,7 +226,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     }
   };
 
-  // --- WELCOME SCREEN (STEP 0) REDESIGN ---
+  // --- WELCOME SCREEN (STEP 0) ---
   if (step === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 relative overflow-hidden">
@@ -233,19 +264,21 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                </div>
                <span className="text-sm font-medium">Esto no es un examen, es una conversación</span>
              </div>
-             <div className="flex items-center gap-3 text-slate-300">
-               <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
-                 <Check className="w-3 h-3 text-emerald-400" />
+             {initialData?.businessName && (
+               <div className="flex items-center gap-3 text-primary-300 bg-primary-900/20 p-2 rounded-lg">
+                 <div className="w-5 h-5 rounded-full bg-primary-500/20 flex items-center justify-center border border-primary-500/30">
+                   <Save className="w-3 h-3 text-primary-400" />
+                 </div>
+                 <span className="text-sm font-bold">Progreso recuperado: {initialData.businessName}</span>
                </div>
-               <span className="text-sm font-medium">Se adapta a tu negocio</span>
-             </div>
+             )}
           </div>
           
           <button 
             onClick={handleNext}
             className="w-full h-14 bg-gradient-to-r from-primary-600 to-primary-500 text-white rounded-xl font-bold text-lg shadow-neon hover:shadow-[0_0_30px_rgba(34,211,238,0.4)] hover:scale-[1.02] transition-all flex items-center justify-center gap-2 group"
           >
-            Empezar mi dirección
+            {initialData?.businessName ? 'Continuar mi dirección' : 'Empezar mi dirección'}
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
           </button>
           
@@ -258,8 +291,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // --- EXISTING STEPS (1-6) WITH MINOR TWEAKS ---
-  // BLOCK 1: BUSINESS BASICS
+  // --- EXISTING STEPS (1-6) ---
   if (step === 1) {
     return (
       <StepLayout 
@@ -268,6 +300,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         onBack={handleBack} 
         onNext={handleNext}
         isNextDisabled={!formData.businessName || !formData.description}
+        isSaving={isSaving}
       >
         <div className="space-y-8">
           <div className="space-y-3">
@@ -310,7 +343,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     );
   }
 
-  // ... (Steps 2-5 remain identical to existing logic, just wrapping in StepLayout) ...
   if (step === 2) {
     return (
       <StepLayout 
@@ -318,6 +350,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         step={2} total={6} 
         onBack={handleBack} 
         onNext={handleNext}
+        isSaving={isSaving}
         microCopy="Queremos la realidad, no la versión perfecta."
       >
         <div className="space-y-8">
@@ -360,6 +393,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         step={3} total={6} 
         onBack={handleBack} 
         onNext={handleNext}
+        isSaving={isSaving}
       >
         <div className="space-y-8">
           <div className="space-y-3">
@@ -397,8 +431,8 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                  <CheckboxBtn 
                    key={worry} 
                    label={worry} 
-                   selected={formData.clientPainPoints.includes(worry)} 
-                   onClick={() => toggleSelection('clientPainPoints', worry)}
+                   selected={formData.painPoints.includes(worry)} 
+                   onClick={() => toggleSelection('painPoints', worry)}
                  />
                ))}
              </div>
@@ -415,6 +449,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         step={4} total={6} 
         onBack={handleBack} 
         onNext={handleNext}
+        isSaving={isSaving}
         microCopy="Si no estás seguro, está bien. Lo analizamos por ti."
       >
         <div className="space-y-8">
@@ -457,6 +492,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         step={5} total={6} 
         onBack={handleBack} 
         onNext={handleNext}
+        isSaving={isSaving}
       >
         <div className="space-y-8">
           <div className="space-y-3">
@@ -499,6 +535,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         step={6} total={6} 
         onBack={handleBack} 
         onNext={handleFinalSubmit}
+        isSaving={isSaving}
         nextLabel="✨ Crear mi diagnóstico"
         microCopy="Analizamos solo el contenido visible. No tocamos nada."
       >
@@ -572,8 +609,9 @@ const StepLayout: React.FC<{
   onNext: () => void;
   nextLabel?: string;
   isNextDisabled?: boolean;
+  isSaving?: boolean;
   microCopy?: string;
-}> = ({ title, children, step, total, onBack, onNext, nextLabel, isNextDisabled, microCopy }) => {
+}> = ({ title, children, step, total, onBack, onNext, nextLabel, isNextDisabled, isSaving, microCopy }) => {
   return (
     <div className="min-h-screen flex flex-col items-center p-4 md:p-8 bg-slate-950">
        <div className="w-full max-w-2xl flex-1 flex flex-col justify-center">
@@ -605,13 +643,20 @@ const StepLayout: React.FC<{
                 >
                   ← Atrás
                 </button>
-                <Button 
-                  onClick={onNext} 
-                  disabled={isNextDisabled}
-                  className="px-8 shadow-neon"
-                >
-                  {nextLabel || 'Siguiente'}
-                </Button>
+                <div className="flex items-center gap-3">
+                  {isSaving && (
+                    <span className="text-xs text-primary-400 animate-pulse flex items-center gap-1">
+                      <Save className="w-3 h-3" /> Guardando...
+                    </span>
+                  )}
+                  <Button 
+                    onClick={onNext} 
+                    disabled={isNextDisabled || isSaving}
+                    className="px-8 shadow-neon"
+                  >
+                    {nextLabel || 'Siguiente'}
+                  </Button>
+                </div>
              </div>
           </motion.div>
        </div>

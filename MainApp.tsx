@@ -15,7 +15,7 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
-import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, UserData } from './services/business.service';
+import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, updateOnboardingProgress, UserData } from './services/business.service';
 import { signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
@@ -28,6 +28,8 @@ export default function MainApp() {
   const [appError, setAppError] = useState<string | null>(null);
   
   const [session, setSession] = useState<any>(null);
+  const [isCheckingSession, setIsCheckingSession] = useState(true); // STRICT CHECK FLAG
+
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [audit, setAudit] = useState<BusinessAudit | null>(null);
@@ -35,7 +37,7 @@ export default function MainApp() {
   const [executionState, setExecutionState] = useState<ExecutionState>({});
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyAgencyPlan | null>(null);
 
-  const [loadingMessage, setLoadingMessage] = useState<string>('Conectando con el servidor...');
+  const [loadingMessage, setLoadingMessage] = useState<string>('Verificando credenciales...');
   const [streamingLog, setStreamingLog] = useState<string>('');
   const [language, setLanguage] = useState<Language>('es');
   const [sidebarAction, setSidebarAction] = useState<string>('');
@@ -44,40 +46,12 @@ export default function MainApp() {
   const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
   
-  // Removed faulty recovery logic that caused loops
-  // const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
-
   const isFetchingRef = useRef(false);
 
-  // --- EFFECT: DETECT SLOW LOADING (COLD START HANDLING) ---
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    let wakeUpTimer: ReturnType<typeof setTimeout>;
-
-    if (view === 'loading') {
-      // 1. Mensaje de "Despertando" a los 4 segundos
-      wakeUpTimer = setTimeout(() => {
-        setLoadingMessage('Despertando base de datos (esto puede tardar unos segundos)...');
-      }, 4000);
-
-      // 2. Botón de reinicio extendido a 20s para conexiones lentas
-      timer = setTimeout(() => {
-        console.warn("⏳ Loading is taking longer than expected...");
-        setShowSlowLoading(true);
-        setLoadingMessage('La conexión está lenta, pero estamos trabajando...');
-      }, 20000);
-    } else {
-      setShowSlowLoading(false);
-    }
-    return () => {
-      clearTimeout(timer);
-      clearTimeout(wakeUpTimer);
-    };
-  }, [view]);
-
-  // --- 1. SESSION MANAGEMENT ---
+  // --- 1. STRICT SESSION INITIALIZATION ---
   useEffect(() => {
     if (!isSupabaseConfigured()) {
+      setIsCheckingSession(false);
       setView('auth');
       return;
     }
@@ -86,31 +60,30 @@ export default function MainApp() {
       try {
         const { data: { session: initialSession }, error } = await supabase.auth.getSession();
         
-        if (error) {
-           console.error("Session Init Error:", error);
-           // Don't force auth immediately on minor errors, try to wait
+        if (error || !initialSession) {
+           console.log("No active session found. Redirecting to Auth.");
+           setSession(null);
            setView('auth');
-           return;
-        }
-
-        if (initialSession) {
-          setSession(initialSession);
-          // Sync logic handles the rest
         } else {
-          // Only go to auth if we are SURE there is no session
-          setView('auth');
+           console.log("Session found:", initialSession.user.email);
+           setSession(initialSession);
+           // Let the data sync effect handle the view transition
         }
       } catch (e) {
-        console.error("Unexpected Session Error:", e);
+        console.error("Session check error:", e);
         setView('auth');
+      } finally {
+        setIsCheckingSession(false);
       }
     };
 
     initSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      console.log("Auth Change:", _event);
       setSession(newSession);
       if (!newSession) {
+        // CLEANUP
         setBusinessId(null);
         setProfile(null);
         setStrategy(null);
@@ -124,18 +97,21 @@ export default function MainApp() {
     };
   }, []);
 
-  // --- 2. DATA SYNC (Improved Logic) ---
+  // --- 2. DATA SYNC & ROUTING ---
   useEffect(() => {
     const syncData = async () => {
-      if (!session?.user?.id || isFetchingRef.current || businessId) return;
+      // Gate: Only run if we have a user and aren't already fetching
+      if (!session?.user?.id || isFetchingRef.current || isCheckingSession) return;
+
+      // If we already have businessId, we don't need to re-fetch unless forced
+      if (businessId && profile) return;
 
       isFetchingRef.current = true;
       setView('loading');
-      setLoadingMessage('Cargando tu estrategia...');
+      setLoadingMessage('Sincronizando tu progreso...');
       setShowSlowLoading(false);
 
       try {
-        console.log("🔄 Starting data load for user:", session.user.id);
         const data: UserData | null = await loadUserData(session.user.id);
         
         if (!data) {
@@ -145,15 +121,19 @@ export default function MainApp() {
 
         const { businessId: bId, profile: uProfile, strategy: uStrategy, weeklyPlan: uPlan } = data;
 
-        // Caso 1: Usuario Nuevo (Sin Business ID)
-        if (!bId || !uProfile) {
-          console.log("🆕 New User Detected");
+        // --- SCENARIO A: NEW USER or PARTIAL ONBOARDING ---
+        if (!bId || !uProfile || !uProfile.isConfigured) {
+          console.log("🆕 New/Partial User Detected");
+          
+          // Important: We set the partial profile so Onboarding can resume!
+          if (uProfile) setProfile(uProfile);
+          
           setView('transition'); 
           isFetchingRef.current = false;
           return;
         }
 
-        // Caso 2: Usuario Existente
+        // --- SCENARIO B: ESTABLISHED USER ---
         console.log("✅ Data Loaded Successfully");
         setBusinessId(bId);
         setProfile(uProfile);
@@ -165,63 +145,58 @@ export default function MainApp() {
         if (uStrategy) {
            setStrategy(uStrategy);
            setAudit(uStrategy.audit);
-           // Si ya tiene plan semanal, va a agenca. Si no, al dashboard.
            setView(uPlan ? 'weekly_agency' : 'dashboard');
         } else {
-           // Caso 3: Tiene perfil pero NO estrategia (Error previo o guardado incompleto)
-           console.log("⚠️ Profile found but no strategy. Redirecting to Report/Generation.");
-           
-           // Si tenemos auditoría parcial en el perfil (legacy), intentamos usarla
-           // Si no, enviamos a generar reporte
+           // Has profile but no strategy (Generation failed previously?)
+           console.log("⚠️ Profile found but no strategy. Redirecting to Report.");
            if (audit) { 
-              // Si de alguna forma hay audit en memoria
               setView('report'); 
            } else {
-              // Generar estrategia de nuevo pero SIN pedir datos de onboarding de nuevo
-              // Asumimos que profile tiene los datos necesarios
               setView('report'); 
-              // Disparamos generación silenciosa si tenemos los datos necesarios
-              if (uProfile.coreMessage) {
-                  // Opcional: Auto-generar
-              }
            }
         }
 
       } catch (err: any) {
         console.error("❌ Sync Error:", err);
-        setLoadingMessage('Error al cargar datos. Reintentando...');
-        // Retry logic managed by user click if stuck
+        setLoadingMessage('Error al cargar datos.');
+        // If sync fails critically, stay on loading or go to auth?
+        // Let's allow user to retry via UI in Loading component
+        setShowSlowLoading(true);
       } finally {
         isFetchingRef.current = false;
       }
     };
 
-    syncData();
-  }, [session, businessId]); 
+    if (session) {
+        syncData();
+    }
+  }, [session, isCheckingSession, businessId]); 
 
   const handleForcedLogout = async (msg?: string) => {
     console.log("🛑 Forced Logout Triggered:", msg);
     setAppError(msg || null);
     isFetchingRef.current = false;
-    signOut().catch(e => console.error("SignOut error:", e));
-    setSession(null); 
+    await signOut();
+    setSession(null);
+    setProfile(null);
+    setStrategy(null);
     setView('auth');
   };
-
-  // --- 3. LOGIC FIX: SAVE STRATEGY IMMEDIATELY ---
-  
-  useEffect(() => {
-    if (isWaitingForStrategy && strategy) {
-      setIsWaitingForStrategy(false);
-      setView('roadmap');
-    }
-  }, [strategy, isWaitingForStrategy]);
-
 
   // --- HANDLERS ---
   const handleLanguageChange = (lang: Language) => {
     setLanguage(lang);
     if (profile) setProfile({ ...profile, language: lang });
+  };
+
+  // Step-by-step Save Handler
+  const handlePartialOnboardingSave = async (partialData: any) => {
+    if (session?.user?.id) {
+      // Merge current profile state with new partial data to avoid overwrites
+      const merged = { ...profile, ...partialData };
+      setProfile(merged as UserProfile); // Optimistic update
+      await updateOnboardingProgress(session.user.id, partialData);
+    }
   };
 
   const handleOnboardingComplete = (newProfile: UserProfile) => {
@@ -232,20 +207,13 @@ export default function MainApp() {
   const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
     setIsPlanGenerating(true);
     try {
-      // 1. Generate Logic
       const plan = await generateActionPlan(profileData, auditData, language);
       const fullStrategy = { ...plan, audit: auditData };
-      
-      // 2. SAVE TO DATABASE IMMEDIATELY (Crucial Fix)
-      console.log("💾 Persisting generated strategy...");
       await saveStrategySnapshot(bizId, profileData, fullStrategy);
-      
-      // 3. Update State
       setStrategy(fullStrategy);
-      
     } catch (err) {
       console.error("Error generating strategy:", err);
-      setAppError("Error generando la estrategia. Por favor reintenta.");
+      setAppError("Error generando la estrategia.");
     } finally {
       setIsPlanGenerating(false);
     }
@@ -253,40 +221,28 @@ export default function MainApp() {
 
   const handleProfileSave = async (profileData: UserProfile) => {
     if (!session?.user?.id) return;
-
     setView('loading');
     setLoadingMessage('Guardando perfil y generando análisis...');
-    
     try {
-      // 1. Save Profile
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
-      
       setView('report'); 
-
-      // 2. Stream Audit
-      const generatedAudit = await generateAuditStream(profileData, language, (text) => {
-        setStreamingLog(text);
-      });
-      
+      const generatedAudit = await generateAuditStream(profileData, language, (text) => setStreamingLog(text));
       setAudit(generatedAudit);
       setStreamingLog(''); 
-      
-      // 3. Trigger Strategy Generation AND Save
       triggerStrategyGeneration(profileData, generatedAudit, business.id);
-      
     } catch (e: any) {
       console.error("Save Profile Error:", e);
-      if (businessId) setView('dashboard'); // Fallback if partial success
+      if (businessId) setView('dashboard'); 
       else {
-        setAppError("Error guardando el perfil. Intenta de nuevo.");
+        setAppError("Error guardando el perfil.");
         setView('onboarding');
       }
     }
   };
 
   const handleAuthSuccess = async () => {
-     // Session update triggers the syncData effect
+     // Triggered by AuthView, session update handles the rest
   };
   
   const handleTransitionComplete = () => {
@@ -298,14 +254,19 @@ export default function MainApp() {
       setView('roadmap');
       return;
     }
-    // If user clicks continue but plan is still generating
     setIsWaitingForStrategy(true);
-    
-    // Safety check: if generation failed or wasn't triggered
     if (!isPlanGenerating && profile && audit && businessId && !strategy) {
        triggerStrategyGeneration(profile, audit, businessId);
     }
   };
+
+  // Wait for strategy logic
+  useEffect(() => {
+    if (isWaitingForStrategy && strategy) {
+      setIsWaitingForStrategy(false);
+      setView('roadmap');
+    }
+  }, [strategy, isWaitingForStrategy]);
 
   const handleStartPriority = () => setView('wow');
   const handleWowContinue = () => setView('dashboard');
@@ -314,7 +275,6 @@ export default function MainApp() {
   const handleEnterWeeklyMode = async () => {
     if (!profile) return;
     if (weeklyPlan) { setView('weekly_agency'); return; }
-
     setView('loading');
     setLoadingMessage(t('generating_week', language));
     try {
@@ -371,8 +331,23 @@ export default function MainApp() {
     return activeIndex === -1 ? 0 : activeIndex;
   };
 
-  // --- RENDER ---
+  // --- RENDER GATES ---
 
+  // 1. Loading Phase (Checking Session)
+  if (isCheckingSession) {
+     return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-950">
+           <Loading message="Iniciando seguridad..." />
+        </div>
+     );
+  }
+
+  // 2. No Session -> FORCE AUTH VIEW
+  if (!session) {
+     return <AuthView onSuccess={handleAuthSuccess} />;
+  }
+
+  // 3. Error State
   if (view === 'error') {
      return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
@@ -389,6 +364,7 @@ export default function MainApp() {
     );
   }
 
+  // 4. Loading Data State
   if (view === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -403,21 +379,28 @@ export default function MainApp() {
     );
   }
 
-  if (view === 'auth') return <AuthView onSuccess={handleAuthSuccess} />;
-  if (view === 'transition') return <TransitionScreen onComplete={handleTransitionComplete} />;
+  if (view === 'transition') return <TransitionScreen onComplete={handleTransitionComplete} userEmail={session.user.email} onLogout={handleForcedLogout} />;
   
   if (view === 'onboarding') {
     return (
       <>
         <LanguageSwitcher currentLang={language} onToggle={handleLanguageChange} />
         <div className="absolute top-6 left-6 z-50">
-           <button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white transition-colors">Salir</button>
+           <button onClick={handleLogout} className="text-slate-500 text-xs font-bold uppercase tracking-widest hover:text-white transition-colors border border-white/10 px-3 py-1.5 rounded-full bg-slate-900/50 backdrop-blur-md">
+             Salir (Guardar y Salir)
+           </button>
         </div>
-        <Onboarding onComplete={handleOnboardingComplete} />
+        <Onboarding 
+          onComplete={handleOnboardingComplete} 
+          onStepSave={handlePartialOnboardingSave}
+          initialData={profile} // PASS SAVED DATA
+        />
       </>
     );
   }
 
+  // --- MAIN APP VIEWS ---
+  
   if (view === 'report' && profile && audit) {
     return (
       <ConsultancyReport 
@@ -479,5 +462,6 @@ export default function MainApp() {
     );
   }
 
+  // Default fallback
   return <AuthView onSuccess={handleAuthSuccess} />;
 }
