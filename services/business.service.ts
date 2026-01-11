@@ -18,9 +18,10 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
     .upsert({
       user_id: userId,
       business_name: profile.businessName,
-      industry: profile.offering,
-      stage: profile.businessAge,
-      profile_data: profile
+      industry: profile.offering || 'General',
+      stage: profile.businessAge || 'Startup',
+      profile_data: profile,
+      updated_at: new Date().toISOString()
     }, { onConflict: 'user_id' })
     .select()
     .single();
@@ -31,26 +32,28 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
 
 // 1.5 Save Partial Onboarding Progress (Step-by-Step)
 export const updateOnboardingProgress = async (userId: string, partialProfile: Partial<UserProfile>) => {
-  // First, verify if a profile exists to merge, or just upsert the json
-  // We use business_name as a fallback if not provided in partial, or empty string
+  // Fix: Ensure we provide values for required columns even if partialProfile doesn't have them yet.
+  // This prevents DB constraint violations if 'industry' or 'stage' are NOT NULL in the schema.
   
+  const payload = {
+    user_id: userId,
+    profile_data: partialProfile, 
+    business_name: partialProfile.businessName || 'Borrador de Negocio',
+    // Fallbacks for potential non-nullable columns
+    industry: partialProfile.offering || partialProfile.description || 'Pendiente', 
+    stage: partialProfile.businessAge || 'Pendiente',
+    updated_at: new Date().toISOString()
+  };
+
   const { error } = await supabase
     .from('business_profiles')
-    .upsert({
-      user_id: userId,
-      // We update the JSONb column. Supabase merges top-level keys automatically if configured, 
-      // but 'upsert' replaces the row. 
-      // To simulate a merge, we normally fetch first, but for MVP speed we will upsert.
-      // NOTE: In a real app, you might want to fetch current profile first or use a postgres function for deep merge.
-      // Here we assume partialProfile contains the accumulator of all steps so far.
-      profile_data: partialProfile, 
-      business_name: partialProfile.businessName || 'Draft Business',
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' });
+    .upsert(payload, { onConflict: 'user_id' });
 
   if (error) {
     console.error("Error saving partial progress:", error);
-    // Don't throw, just log. We don't want to block the user flow if autosave fails temporarily.
+    // Silent fail is acceptable for autosave, but logging it helps debugging
+  } else {
+    console.log("✅ Partial progress saved for:", userId);
   }
 };
 
@@ -90,6 +93,7 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
     }
 
     if (!business) {
+       console.log("No business profile found for user.");
        return { 
          businessId: null, 
          profile: null, 
@@ -97,6 +101,16 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
          executionState: {}, 
          weeklyPlan: null 
        };
+    }
+
+    // Fix: Safely parse profile_data if it comes back as a string (rare but possible in some Supabase configs)
+    let profileFromDB = business.profile_data;
+    if (typeof profileFromDB === 'string') {
+        try {
+            profileFromDB = JSON.parse(profileFromDB);
+        } catch (e) {
+            console.error("Failed to parse profile_data JSON", e);
+        }
     }
 
     // B. Obtener Strategy y Progreso en PARALELO para mayor velocidad
@@ -114,8 +128,12 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
         .maybeSingle()
     ]);
 
-    const resolvedProfile = (strategyResult.data?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
     const resolvedStrategy = (strategyResult.data?.strategy_snapshot?.strategy as ComprehensiveStrategy) || null;
+    
+    // Resolve Profile: Prefer strategy snapshot (historical), fallback to current business profile
+    const resolvedProfile = (strategyResult.data?.strategy_snapshot?.profile as UserProfile) || (profileFromDB as UserProfile) || null;
+
+    console.log("✅ Data Loaded. Profile found:", !!resolvedProfile);
 
     return {
       businessId: business.id,
