@@ -15,7 +15,7 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
-import { saveBusinessProfile, loadUserData, saveUserProgress, UserData } from './services/business.service';
+import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, UserData } from './services/business.service';
 import { signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
@@ -43,7 +43,9 @@ export default function MainApp() {
 
   const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
-  const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
+  
+  // Removed faulty recovery logic that caused loops
+  // const [shouldRecoverStrategy, setShouldRecoverStrategy] = useState(false);
 
   const isFetchingRef = useRef(false);
 
@@ -58,12 +60,12 @@ export default function MainApp() {
         setLoadingMessage('Despertando base de datos (esto puede tardar unos segundos)...');
       }, 4000);
 
-      // 2. Botón de reinicio a los 15 segundos (Damos tiempo para el Cold Start que suele ser ~10s)
+      // 2. Botón de reinicio extendido a 20s para conexiones lentas
       timer = setTimeout(() => {
         console.warn("⏳ Loading is taking longer than expected...");
         setShowSlowLoading(true);
-        setLoadingMessage('El servidor está tardando más de lo normal...');
-      }, 15000);
+        setLoadingMessage('La conexión está lenta, pero estamos trabajando...');
+      }, 20000);
     } else {
       setShowSlowLoading(false);
     }
@@ -75,28 +77,27 @@ export default function MainApp() {
 
   // --- 1. SESSION MANAGEMENT ---
   useEffect(() => {
-    // Immediate configuration check
     if (!isSupabaseConfigured()) {
       setView('auth');
       return;
     }
 
-    // Initialize Session Check
     const initSession = async () => {
       try {
         const { data: { session: initialSession }, error } = await supabase.auth.getSession();
         
         if (error) {
            console.error("Session Init Error:", error);
+           // Don't force auth immediately on minor errors, try to wait
            setView('auth');
            return;
         }
 
         if (initialSession) {
           setSession(initialSession);
-          // Sync logic handleará el resto
+          // Sync logic handles the rest
         } else {
-          // No hay sesión, vamos al login
+          // Only go to auth if we are SURE there is no session
           setView('auth');
         }
       } catch (e) {
@@ -107,11 +108,9 @@ export default function MainApp() {
 
     initSession();
 
-    // Listen for Auth Changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       if (!newSession) {
-        // Full reset on logout
         setBusinessId(null);
         setProfile(null);
         setStrategy(null);
@@ -125,15 +124,14 @@ export default function MainApp() {
     };
   }, []);
 
-  // --- 2. DATA SYNC ---
+  // --- 2. DATA SYNC (Improved Logic) ---
   useEffect(() => {
     const syncData = async () => {
-      // Only sync if we have a user, we aren't already syncing, and we haven't loaded data yet
       if (!session?.user?.id || isFetchingRef.current || businessId) return;
 
       isFetchingRef.current = true;
       setView('loading');
-      setLoadingMessage('Sincronizando perfil...');
+      setLoadingMessage('Cargando tu estrategia...');
       setShowSlowLoading(false);
 
       try {
@@ -141,12 +139,13 @@ export default function MainApp() {
         const data: UserData | null = await loadUserData(session.user.id);
         
         if (!data) {
+           // Auth error or database unresponsive
            throw new Error("AUTH_SYNC_FAILED");
         }
 
         const { businessId: bId, profile: uProfile, strategy: uStrategy, weeklyPlan: uPlan } = data;
 
-        // New User -> Onboarding
+        // Caso 1: Usuario Nuevo (Sin Business ID)
         if (!bId || !uProfile) {
           console.log("🆕 New User Detected");
           setView('transition'); 
@@ -154,7 +153,7 @@ export default function MainApp() {
           return;
         }
 
-        // Existing User -> Dashboard
+        // Caso 2: Usuario Existente
         console.log("✅ Data Loaded Successfully");
         setBusinessId(bId);
         setProfile(uProfile);
@@ -166,24 +165,32 @@ export default function MainApp() {
         if (uStrategy) {
            setStrategy(uStrategy);
            setAudit(uStrategy.audit);
+           // Si ya tiene plan semanal, va a agenca. Si no, al dashboard.
            setView(uPlan ? 'weekly_agency' : 'dashboard');
         } else {
-           console.log("⚠️ Profile found but no strategy. Attempting recovery.");
-           setShouldRecoverStrategy(true);
-           setView('dashboard'); 
+           // Caso 3: Tiene perfil pero NO estrategia (Error previo o guardado incompleto)
+           console.log("⚠️ Profile found but no strategy. Redirecting to Report/Generation.");
+           
+           // Si tenemos auditoría parcial en el perfil (legacy), intentamos usarla
+           // Si no, enviamos a generar reporte
+           if (audit) { 
+              // Si de alguna forma hay audit en memoria
+              setView('report'); 
+           } else {
+              // Generar estrategia de nuevo pero SIN pedir datos de onboarding de nuevo
+              // Asumimos que profile tiene los datos necesarios
+              setView('report'); 
+              // Disparamos generación silenciosa si tenemos los datos necesarios
+              if (uProfile.coreMessage) {
+                  // Opcional: Auto-generar
+              }
+           }
         }
 
       } catch (err: any) {
         console.error("❌ Sync Error:", err);
-        // Si falla la sincronización, no forzamos logout inmediatamente, dejamos que el usuario decida
-        // o reintentamos
         setLoadingMessage('Error al cargar datos. Reintentando...');
-        setTimeout(() => {
-           // Si falla repetidamente, mostramos error
-           if (isFetchingRef.current) {
-              handleForcedLogout("Error de conexión. Por favor reingresa.");
-           }
-        }, 5000);
+        // Retry logic managed by user click if stuck
       } finally {
         isFetchingRef.current = false;
       }
@@ -194,30 +201,15 @@ export default function MainApp() {
 
   const handleForcedLogout = async (msg?: string) => {
     console.log("🛑 Forced Logout Triggered:", msg);
-    // 1. Reset local state immediately to unblock UI
     setAppError(msg || null);
     isFetchingRef.current = false;
-    
-    // 2. Try to sign out from Supabase (don't await indefinitely)
     signOut().catch(e => console.error("SignOut error:", e));
-    
-    // 3. Force view to auth
     setSession(null); 
     setView('auth');
   };
 
-  const handleResetApp = () => {
-    window.location.reload();
-  };
-
-  // --- 3. RECOVERY & GENERATION LOGIC ---
-  useEffect(() => {
-    if (shouldRecoverStrategy && profile && session && !isPlanGenerating) {
-      setShouldRecoverStrategy(false);
-      handleProfileSave(profile);
-    }
-  }, [shouldRecoverStrategy, profile, session]);
-
+  // --- 3. LOGIC FIX: SAVE STRATEGY IMMEDIATELY ---
+  
   useEffect(() => {
     if (isWaitingForStrategy && strategy) {
       setIsWaitingForStrategy(false);
@@ -240,11 +232,20 @@ export default function MainApp() {
   const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
     setIsPlanGenerating(true);
     try {
+      // 1. Generate Logic
       const plan = await generateActionPlan(profileData, auditData, language);
       const fullStrategy = { ...plan, audit: auditData };
+      
+      // 2. SAVE TO DATABASE IMMEDIATELY (Crucial Fix)
+      console.log("💾 Persisting generated strategy...");
+      await saveStrategySnapshot(bizId, profileData, fullStrategy);
+      
+      // 3. Update State
       setStrategy(fullStrategy);
+      
     } catch (err) {
       console.error("Error generating strategy:", err);
+      setAppError("Error generando la estrategia. Por favor reintenta.");
     } finally {
       setIsPlanGenerating(false);
     }
@@ -257,23 +258,26 @@ export default function MainApp() {
     setLoadingMessage('Guardando perfil y generando análisis...');
     
     try {
+      // 1. Save Profile
       const business = await saveBusinessProfile(session.user.id, profileData);
       setBusinessId(business.id);
       
-      // Move to report view immediately to show progress
       setView('report'); 
 
+      // 2. Stream Audit
       const generatedAudit = await generateAuditStream(profileData, language, (text) => {
         setStreamingLog(text);
       });
       
       setAudit(generatedAudit);
       setStreamingLog(''); 
+      
+      // 3. Trigger Strategy Generation AND Save
       triggerStrategyGeneration(profileData, generatedAudit, business.id);
       
     } catch (e: any) {
       console.error("Save Profile Error:", e);
-      if (businessId) setView('dashboard');
+      if (businessId) setView('dashboard'); // Fallback if partial success
       else {
         setAppError("Error guardando el perfil. Intenta de nuevo.");
         setView('onboarding');
@@ -294,9 +298,12 @@ export default function MainApp() {
       setView('roadmap');
       return;
     }
+    // If user clicks continue but plan is still generating
     setIsWaitingForStrategy(true);
-    if (!isPlanGenerating && profile && audit && businessId) {
-      triggerStrategyGeneration(profile, audit, businessId);
+    
+    // Safety check: if generation failed or wasn't triggered
+    if (!isPlanGenerating && profile && audit && businessId && !strategy) {
+       triggerStrategyGeneration(profile, audit, businessId);
     }
   };
 

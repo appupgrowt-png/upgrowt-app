@@ -2,7 +2,7 @@
 import { supabase } from '../lib/supabase';
 import { UserProfile, ComprehensiveStrategy, ExecutionState, WeeklyAgencyPlan } from '../types';
 
-// Definición explícita del tipo de retorno para evitar errores de inferencia
+// Definición explícita del tipo de retorno
 export interface UserData {
   businessId: string | null;
   profile: UserProfile | null;
@@ -11,7 +11,7 @@ export interface UserData {
   weeklyPlan: WeeklyAgencyPlan | null;
 }
 
-// 1. Save Profile Only (Used during Onboarding -> Auth transition)
+// 1. Save Profile Only
 export const saveBusinessProfile = async (userId: string, profile: UserProfile) => {
   const { data, error } = await supabase
     .from('business_profiles')
@@ -29,23 +29,29 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
   return data;
 };
 
-// 2. Save Strategy
+// 2. Save Strategy (Fixed & Exported)
 export const saveStrategySnapshot = async (businessId: string, profile: UserProfile, strategy: ComprehensiveStrategy) => {
+  console.log("💾 Saving Strategy Snapshot...", businessId);
   const { error } = await supabase
     .from('strategy_summary')
     .upsert({
       business_id: businessId,
       strategy_snapshot: { profile, strategy },
-      locked: false
+      locked: false,
+      updated_at: new Date().toISOString()
     }, { onConflict: 'business_id' });
 
-  if (error) throw error;
+  if (error) {
+    console.error("❌ Error saving strategy:", error);
+    throw error;
+  }
+  console.log("✅ Strategy Saved Successfully");
 };
 
-// 3. Load Full Data (Critical Function)
+// 3. Load Full Data (Optimized with Promise.all for Speed)
 export const loadUserData = async (userId: string): Promise<UserData | null> => {
   try {
-    // A. Obtener Business Profile directamente
+    // A. Obtener Business Profile primero (Necesitamos el ID)
     const { data: business, error: busError } = await supabase
       .from('business_profiles')
       .select('id, business_name, profile_data')
@@ -54,14 +60,11 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
 
     if (busError) {
        console.warn("DB Read Error (Business):", busError.message);
-       if (busError.code === '401' || busError.code === 'PGRST301') {
-          throw new Error('AUTH_INVALID');
-       }
+       if (busError.code === '401' || busError.code === 'PGRST301') throw new Error('AUTH_INVALID');
        return null; 
     }
 
     if (!business) {
-       // Usuario autenticado pero sin datos de negocio -> Onboarding
        return { 
          businessId: null, 
          profile: null, 
@@ -71,29 +74,32 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
        };
     }
 
-    // B. Obtener Strategy (si existe)
-    const { data: strategyData } = await supabase
-      .from('strategy_summary')
-      .select('strategy_snapshot')
-      .eq('business_id', business.id)
-      .maybeSingle();
+    // B. Obtener Strategy y Progreso en PARALELO para mayor velocidad
+    const [strategyResult, progressResult] = await Promise.all([
+      supabase
+        .from('strategy_summary')
+        .select('strategy_snapshot')
+        .eq('business_id', business.id)
+        .maybeSingle(),
+      
+      supabase
+        .from('user_progress')
+        .select('execution_state, weekly_state')
+        .eq('business_id', business.id)
+        .maybeSingle()
+    ]);
 
-    // C. Obtener Progreso
-    const { data: progressData } = await supabase
-      .from('user_progress')
-      .select('execution_state, weekly_state')
-      .eq('business_id', business.id)
-      .maybeSingle();
-
-    const resolvedProfile = (strategyData?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
+    const resolvedProfile = (strategyResult.data?.strategy_snapshot?.profile as UserProfile) || (business.profile_data as UserProfile) || null;
+    const resolvedStrategy = (strategyResult.data?.strategy_snapshot?.strategy as ComprehensiveStrategy) || null;
 
     return {
       businessId: business.id,
       profile: resolvedProfile,
-      strategy: strategyData?.strategy_snapshot?.strategy as ComprehensiveStrategy || null,
-      executionState: (progressData?.execution_state as ExecutionState) || {},
-      weeklyPlan: (progressData?.weekly_state as WeeklyAgencyPlan) || null
+      strategy: resolvedStrategy,
+      executionState: (progressResult.data?.execution_state as ExecutionState) || {},
+      weeklyPlan: (progressResult.data?.weekly_state as WeeklyAgencyPlan) || null
     };
+
   } catch (error: any) {
     if (error.message === 'AUTH_INVALID') throw error;
     console.error("Critical Load Error:", error);
