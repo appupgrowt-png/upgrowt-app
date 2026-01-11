@@ -32,6 +32,12 @@ const callWithRetry = async <T>(fn: () => Promise<T>, retries = 3, initialDelay 
     } catch (error: any) {
       attempt++;
       
+      // Check for 404 Model Not Found specifically
+      if (error?.message?.includes('404') || error?.status === 404 || error?.message?.includes('not found')) {
+         console.error("Model version not found. Ensure you are using the correct Gemini model string.");
+         throw new Error("Modelo de IA no disponible (404). Por favor contacta soporte.");
+      }
+
       const isRateLimit = 
         error?.status === 429 || 
         error?.status === 'RESOURCE_EXHAUSTED' ||
@@ -276,13 +282,15 @@ const weeklyPlanSchema: Schema = {
 
 // --- MODEL CONFIGURATION ---
 
-// DEEP_MODEL: Gemini 1.5 Pro. Slower, massive context, best reasoning. 
-// Used for: Audits, Strategy Creation, Weekly Planning, Final Documents.
-const DEEP_MODEL = "gemini-1.5-pro";
+// ACTUALIZACIÓN CRÍTICA: 
+// Usamos las versiones "Gemini 3 Preview" para solucionar el error 404 de la versión 1.5.
+// Estos modelos son más rápidos y estables.
 
-// FAST_MODEL: Gemini 1.5 Flash. Fast, efficient, good for tasks.
-// Used for: Chat, Content Generation, Trends, Copywriting.
-const FAST_MODEL = "gemini-1.5-flash";
+// DEEP_MODEL: Used for Audits, Strategy Creation, Weekly Planning, Final Documents.
+const DEEP_MODEL = "gemini-3-pro-preview";
+
+// FAST_MODEL: Used for Chat, Content Generation, Trends, Copywriting.
+const FAST_MODEL = "gemini-3-flash-preview";
 
 // --- FUNCTIONS ---
 
