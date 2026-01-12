@@ -28,7 +28,7 @@ export default function MainApp() {
   const [appError, setAppError] = useState<string | null>(null);
   
   const [session, setSession] = useState<any>(null);
-  const [isCheckingSession, setIsCheckingSession] = useState(true); // STRICT CHECK FLAG
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
 
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -48,7 +48,7 @@ export default function MainApp() {
   
   const isFetchingRef = useRef(false);
 
-  // --- 1. STRICT SESSION INITIALIZATION ---
+  // --- 1. SESSION MANAGEMENT ---
   useEffect(() => {
     if (!isSupabaseConfigured()) {
       setIsCheckingSession(false);
@@ -61,13 +61,12 @@ export default function MainApp() {
         const { data: { session: initialSession }, error } = await supabase.auth.getSession();
         
         if (error || !initialSession) {
-           console.log("No active session found. Redirecting to Auth.");
+           console.log("No active session found.");
            setSession(null);
            setView('auth');
         } else {
            console.log("Session found:", initialSession.user.email);
            setSession(initialSession);
-           // Let the data sync effect handle the view transition
         }
       } catch (e) {
         console.error("Session check error:", e);
@@ -80,10 +79,8 @@ export default function MainApp() {
     initSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      console.log("Auth Change:", _event);
       setSession(newSession);
       if (!newSession) {
-        // CLEANUP
         setBusinessId(null);
         setProfile(null);
         setStrategy(null);
@@ -97,14 +94,40 @@ export default function MainApp() {
     };
   }, []);
 
-  // --- 2. DATA SYNC & ROUTING ---
+  // --- 2. DATA RECOVERY LOGIC ---
+  const recoverStrategy = async (currentProfile: UserProfile, bId: string) => {
+    console.log("🔄 Regenerating missing strategy/audit...");
+    setView('loading');
+    setLoadingMessage('Recuperando análisis estratégico...');
+    
+    try {
+      // 1. Regenerate Audit
+      const generatedAudit = await generateAuditStream(currentProfile, language, (text) => setStreamingLog(text));
+      setAudit(generatedAudit);
+      setStreamingLog('');
+      
+      // 2. Regenerate Strategy
+      setLoadingMessage('Regenerando plan de acción...');
+      const plan = await generateActionPlan(currentProfile, generatedAudit, language);
+      const fullStrategy = { ...plan, audit: generatedAudit };
+      
+      // 3. Save
+      await saveStrategySnapshot(bId, currentProfile, fullStrategy);
+      
+      setStrategy(fullStrategy);
+      setView('dashboard');
+    } catch (e) {
+      console.error("Recovery failed", e);
+      setAppError("Error recuperando datos. Por favor contacta soporte.");
+      setView('error');
+    }
+  };
+
+  // --- 3. DATA SYNC ---
   useEffect(() => {
     const syncData = async () => {
-      // Gate: Only run if we have a user and aren't already fetching
       if (!session?.user?.id || isFetchingRef.current || isCheckingSession) return;
-
-      // If we already have businessId, we don't need to re-fetch unless forced
-      if (businessId && profile) return;
+      if (businessId && profile && strategy) return; // Already loaded
 
       isFetchingRef.current = true;
       setView('loading');
@@ -114,27 +137,21 @@ export default function MainApp() {
       try {
         const data: UserData | null = await loadUserData(session.user.id);
         
-        if (!data) {
-           // Auth error or database unresponsive
-           throw new Error("AUTH_SYNC_FAILED");
-        }
+        if (!data) throw new Error("AUTH_SYNC_FAILED");
 
         const { businessId: bId, profile: uProfile, strategy: uStrategy, weeklyPlan: uPlan } = data;
 
-        // --- SCENARIO A: NEW USER or PARTIAL ONBOARDING ---
+        // SCENARIO A: NEW / PARTIAL
         if (!bId || !uProfile || !uProfile.isConfigured) {
           console.log("🆕 New/Partial User Detected");
-          
-          // Important: We set the partial profile so Onboarding can resume!
           if (uProfile) setProfile(uProfile);
-          
           setView('transition'); 
           isFetchingRef.current = false;
           return;
         }
 
-        // --- SCENARIO B: ESTABLISHED USER ---
-        console.log("✅ Data Loaded Successfully");
+        // SCENARIO B: ESTABLISHED USER
+        console.log("✅ Profile Loaded");
         setBusinessId(bId);
         setProfile(uProfile);
         
@@ -143,25 +160,22 @@ export default function MainApp() {
         if (uPlan) setWeeklyPlan(uPlan);
 
         if (uStrategy) {
+           console.log("✅ Strategy Loaded");
            setStrategy(uStrategy);
            setAudit(uStrategy.audit);
            setView(uPlan ? 'weekly_agency' : 'dashboard');
         } else {
-           // Has profile but no strategy (Generation failed previously?)
-           console.log("⚠️ Profile found but no strategy. Redirecting to Report.");
-           if (audit) { 
-              setView('report'); 
-           } else {
-              setView('report'); 
-           }
+           console.log("⚠️ Profile found but NO STRATEGY. Triggering recovery.");
+           isFetchingRef.current = false; // Allow recovery function to run
+           recoverStrategy(uProfile, bId);
+           return;
         }
 
       } catch (err: any) {
         console.error("❌ Sync Error:", err);
         setLoadingMessage('Error al cargar datos.');
-        // If sync fails critically, stay on loading or go to auth?
-        // Let's allow user to retry via UI in Loading component
-        setShowSlowLoading(true);
+        setAppError("No pudimos cargar tus datos. Intenta recargar.");
+        setView('error');
       } finally {
         isFetchingRef.current = false;
       }
@@ -173,7 +187,6 @@ export default function MainApp() {
   }, [session, isCheckingSession, businessId]); 
 
   const handleForcedLogout = async (msg?: string) => {
-    console.log("🛑 Forced Logout Triggered:", msg);
     setAppError(msg || null);
     isFetchingRef.current = false;
     await signOut();
@@ -189,12 +202,10 @@ export default function MainApp() {
     if (profile) setProfile({ ...profile, language: lang });
   };
 
-  // Step-by-step Save Handler
   const handlePartialOnboardingSave = async (partialData: any) => {
     if (session?.user?.id) {
-      // Merge current profile state with new partial data to avoid overwrites
       const merged = { ...profile, ...partialData };
-      setProfile(merged as UserProfile); // Optimistic update
+      setProfile(merged as UserProfile);
       await updateOnboardingProgress(session.user.id, partialData);
     }
   };
@@ -241,13 +252,9 @@ export default function MainApp() {
     }
   };
 
-  const handleAuthSuccess = async () => {
-     // Triggered by AuthView, session update handles the rest
-  };
+  const handleAuthSuccess = async () => {};
   
-  const handleTransitionComplete = () => {
-    setView('onboarding');
-  };
+  const handleTransitionComplete = () => setView('onboarding');
 
   const handleReportContinue = () => {
     if (strategy) {
@@ -260,7 +267,6 @@ export default function MainApp() {
     }
   };
 
-  // Wait for strategy logic
   useEffect(() => {
     if (isWaitingForStrategy && strategy) {
       setIsWaitingForStrategy(false);
@@ -331,9 +337,8 @@ export default function MainApp() {
     return activeIndex === -1 ? 0 : activeIndex;
   };
 
-  // --- RENDER GATES ---
+  // --- RENDER ---
 
-  // 1. Loading Phase (Checking Session)
   if (isCheckingSession) {
      return (
         <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -342,12 +347,10 @@ export default function MainApp() {
      );
   }
 
-  // 2. No Session -> FORCE AUTH VIEW
   if (!session) {
      return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
-  // 3. Error State
   if (view === 'error') {
      return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
@@ -364,7 +367,6 @@ export default function MainApp() {
     );
   }
 
-  // 4. Loading Data State
   if (view === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -393,14 +395,12 @@ export default function MainApp() {
         <Onboarding 
           onComplete={handleOnboardingComplete} 
           onStepSave={handlePartialOnboardingSave}
-          initialData={profile} // PASS SAVED DATA
+          initialData={profile} 
         />
       </>
     );
   }
 
-  // --- MAIN APP VIEWS ---
-  
   if (view === 'report' && profile && audit) {
     return (
       <ConsultancyReport 
@@ -412,6 +412,9 @@ export default function MainApp() {
     );
   }
 
+  // --- SAFE FALLBACK FOR DASHBOARD VIEWS ---
+  // Ensure we have data before rendering these views to prevent the "AuthView loop"
+  
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
@@ -462,6 +465,10 @@ export default function MainApp() {
     );
   }
 
-  // Default fallback
-  return <AuthView onSuccess={handleAuthSuccess} />;
+  // Final Catch-all: If logged in but view state is weird (e.g. 'report' but no audit), show loading or error instead of Auth
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-950">
+       <Loading message="Restaurando sesión..." onReset={handleLogout} showReset={true} />
+    </div>
+  );
 }
