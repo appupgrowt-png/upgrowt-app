@@ -32,14 +32,10 @@ export const saveBusinessProfile = async (userId: string, profile: UserProfile) 
 
 // 1.5 Save Partial Onboarding Progress (Step-by-Step)
 export const updateOnboardingProgress = async (userId: string, partialProfile: Partial<UserProfile>) => {
-  // Fix: Ensure we provide values for required columns even if partialProfile doesn't have them yet.
-  // This prevents DB constraint violations if 'industry' or 'stage' are NOT NULL in the schema.
-  
   const payload = {
     user_id: userId,
     profile_data: partialProfile, 
     business_name: partialProfile.businessName || 'Borrador de Negocio',
-    // Fallbacks for potential non-nullable columns
     industry: partialProfile.offering || partialProfile.description || 'Pendiente', 
     stage: partialProfile.businessAge || 'Pendiente',
     updated_at: new Date().toISOString()
@@ -51,7 +47,6 @@ export const updateOnboardingProgress = async (userId: string, partialProfile: P
 
   if (error) {
     console.error("Error saving partial progress:", error);
-    // Silent fail is acceptable for autosave, but logging it helps debugging
   } else {
     console.log("✅ Partial progress saved for:", userId);
   }
@@ -79,7 +74,6 @@ export const saveStrategySnapshot = async (businessId: string, profile: UserProf
 // 3. Load Full Data (Optimized with Promise.all for Speed)
 export const loadUserData = async (userId: string): Promise<UserData | null> => {
   try {
-    // A. Obtener Business Profile primero (Necesitamos el ID)
     const { data: business, error: busError } = await supabase
       .from('business_profiles')
       .select('id, business_name, profile_data')
@@ -103,7 +97,6 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
        };
     }
 
-    // Fix: Safely parse profile_data if it comes back as a string (rare but possible in some Supabase configs)
     let profileFromDB = business.profile_data;
     if (typeof profileFromDB === 'string') {
         try {
@@ -113,7 +106,6 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
         }
     }
 
-    // B. Obtener Strategy y Progreso en PARALELO para mayor velocidad
     const [strategyResult, progressResult] = await Promise.all([
       supabase
         .from('strategy_summary')
@@ -129,8 +121,6 @@ export const loadUserData = async (userId: string): Promise<UserData | null> => 
     ]);
 
     const resolvedStrategy = (strategyResult.data?.strategy_snapshot?.strategy as ComprehensiveStrategy) || null;
-    
-    // Resolve Profile: Prefer strategy snapshot (historical), fallback to current business profile
     const resolvedProfile = (strategyResult.data?.strategy_snapshot?.profile as UserProfile) || (profileFromDB as UserProfile) || null;
 
     console.log("✅ Data Loaded. Profile found:", !!resolvedProfile);
@@ -166,4 +156,25 @@ export const saveUserProgress = async (userId: string, businessId: string, type:
     .upsert(updatePayload, { onConflict: 'user_id' });
 
   if (error) console.error("Error guardando progreso:", error);
+};
+
+// 5. HARD RESET (New)
+export const resetUserAccount = async (userId: string) => {
+  console.log("⚠️ TRIGGERING HARD RESET for user:", userId);
+  
+  // Get Business ID first
+  const { data: b } = await supabase
+    .from('business_profiles')
+    .select('id')
+    .eq('user_id', userId)
+    .single();
+
+  if (b) {
+    // Delete dependent tables first (if no cascade)
+    await supabase.from('strategy_summary').delete().eq('business_id', b.id);
+    await supabase.from('user_progress').delete().eq('business_id', b.id);
+    // Delete profile
+    await supabase.from('business_profiles').delete().eq('id', b.id);
+    console.log("✅ User data wiped successfully.");
+  }
 };

@@ -15,7 +15,7 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
 import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
-import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, updateOnboardingProgress, UserData } from './services/business.service';
+import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, updateOnboardingProgress, resetUserAccount, UserData } from './services/business.service';
 import { signOut } from './services/auth.service';
 import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
 import { t } from './utils/i18n';
@@ -118,7 +118,7 @@ export default function MainApp() {
       setView('dashboard');
     } catch (e) {
       console.error("Recovery failed", e);
-      setAppError("Error recuperando datos. Por favor contacta soporte.");
+      setAppError("Error recuperando datos. Es posible que la IA esté saturada.");
       setView('error');
     }
   };
@@ -194,6 +194,23 @@ export default function MainApp() {
     setProfile(null);
     setStrategy(null);
     setView('auth');
+  };
+
+  const handleResetAccount = async () => {
+    if (!session?.user?.id) return;
+    if (!window.confirm("¿Estás seguro? Esto borrará tu perfil y tendrás que empezar el onboarding de nuevo.")) return;
+    
+    setView('loading');
+    setLoadingMessage("Reseteando tu cuenta...");
+    try {
+        await resetUserAccount(session.user.id);
+        // Force reload to clear all states
+        window.location.reload();
+    } catch (e) {
+        console.error(e);
+        setAppError("No se pudo resetear. Intenta contactar soporte.");
+        setView('error');
+    }
   };
 
   // --- HANDLERS ---
@@ -358,10 +375,24 @@ export default function MainApp() {
            <div className="text-5xl mb-4">🔌</div>
            <h2 className="text-2xl font-bold text-white mb-2">Conexión Interrumpida</h2>
            <p className="text-slate-400 mb-6">{appError || "Ocurrió un error inesperado al cargar tus datos."}</p>
-           <Button onClick={() => window.location.reload()}>Reintentar Conexión</Button>
-           <button onClick={() => handleForcedLogout()} className="block mx-auto mt-4 text-slate-500 text-xs hover:text-white underline">
-             Cerrar Sesión y Salir
-           </button>
+           
+           <div className="space-y-3">
+             <Button onClick={() => window.location.reload()}>Reintentar Conexión</Button>
+             
+             <div className="pt-4 border-t border-white/5">
+                <p className="text-xs text-slate-500 mb-2">¿Sigues teniendo problemas?</p>
+                <button 
+                  onClick={handleResetAccount}
+                  className="px-4 py-2 rounded-lg bg-red-900/20 text-red-400 border border-red-500/30 text-xs font-bold hover:bg-red-900/40 transition-colors w-full"
+                >
+                  ⚠️ Resetear mis datos y empezar de cero
+                </button>
+             </div>
+
+             <button onClick={() => handleForcedLogout()} className="block mx-auto mt-2 text-slate-500 text-xs hover:text-white underline">
+               Cerrar Sesión y Salir
+             </button>
+           </div>
         </div>
       </div>
     );
@@ -411,9 +442,6 @@ export default function MainApp() {
       />
     );
   }
-
-  // --- SAFE FALLBACK FOR DASHBOARD VIEWS ---
-  // Ensure we have data before rendering these views to prevent the "AuthView loop"
   
   const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="flex min-h-screen bg-slate-950">
@@ -465,7 +493,6 @@ export default function MainApp() {
     );
   }
 
-  // Final Catch-all: If logged in but view state is weird (e.g. 'report' but no audit), show loading or error instead of Auth
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950">
        <Loading message="Restaurando sesión..." onReset={handleLogout} showReset={true} />
