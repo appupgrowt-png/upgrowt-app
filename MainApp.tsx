@@ -1,501 +1,278 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { loadUserData, saveBusinessProfile, updateOnboardingProgress, saveUserProgress, resetUserAccount, UserData, UserAppState } from './services/business.service';
+import { signOut } from './services/auth.service';
+import { UserProfile, ComprehensiveStrategy, ExecutionState, WeeklyAgencyPlan } from './types';
+
+// Components
+import { AuthView } from './components/AuthView';
 import { Onboarding } from './components/Onboarding';
-import { Sidebar } from './components/Sidebar';
+import { StrategyGenerator } from './components/StrategyGenerator';
 import { ConsultancyReport } from './components/ConsultancyReport';
 import { RoadmapView } from './components/RoadmapView';
 import { DashboardHome } from './components/DashboardHome';
 import { WeeklyAgencyDashboard } from './components/WeeklyAgencyDashboard';
 import { WowMoment } from './components/WowMoment';
 import { CompletionSuccess } from './components/CompletionSuccess';
-import { Pricing } from './components/Pricing';
+import { Sidebar } from './components/Sidebar';
 import { Loading } from './components/ui/Loading';
-import { Button } from './components/ui/Button';
-import { LanguageSwitcher } from './components/LanguageSwitcher';
-import { AuthView } from './components/AuthView';
 import { TransitionScreen } from './components/TransitionScreen';
-import { generateAuditStream, generateActionPlan, generateWeeklyAgencyPlan } from './services/geminiService';
-import { saveBusinessProfile, loadUserData, saveUserProgress, saveStrategySnapshot, updateOnboardingProgress, resetUserAccount, UserData } from './services/business.service';
-import { signOut } from './services/auth.service';
-import { UserProfile, ComprehensiveStrategy, Language, BusinessAudit, ExecutionState, WeeklyAgencyPlan } from './types';
-import { t } from './utils/i18n';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
-
-type ViewState = 'auth' | 'transition' | 'onboarding' | 'report' | 'roadmap' | 'wow' | 'dashboard' | 'completion' | 'pricing' | 'weekly_agency' | 'loading' | 'error';
+import { Pricing } from './components/Pricing';
+import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { generateWeeklyAgencyPlan } from './services/geminiService';
 
 export default function MainApp() {
-  const [view, setView] = useState<ViewState>('loading');
-  const [appError, setAppError] = useState<string | null>(null);
-  
+  // --- GLOBAL STATE ---
   const [session, setSession] = useState<any>(null);
-  const [isCheckingSession, setIsCheckingSession] = useState(true);
-
+  const [status, setStatus] = useState<'INITIALIZING' | 'AUTH_REQUIRED' | 'LOADING_DATA' | 'APP_READY'>('INITIALIZING');
+  
+  // --- APP DATA ---
+  const [appState, setAppState] = useState<UserAppState>('NEW_USER');
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [audit, setAudit] = useState<BusinessAudit | null>(null);
   const [strategy, setStrategy] = useState<ComprehensiveStrategy | null>(null);
   const [executionState, setExecutionState] = useState<ExecutionState>({});
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyAgencyPlan | null>(null);
 
-  const [loadingMessage, setLoadingMessage] = useState<string>('Verificando credenciales...');
-  const [streamingLog, setStreamingLog] = useState<string>('');
-  const [language, setLanguage] = useState<Language>('es');
-  const [sidebarAction, setSidebarAction] = useState<string>('');
-  const [showSlowLoading, setShowSlowLoading] = useState(false);
+  // --- UI STATE ---
+  const [currentView, setCurrentView] = useState<string>('default'); // 'default' is determined by appState
+  const [lang, setLang] = useState<'es'|'en'>('es');
+  const [loadingMsg, setLoadingMsg] = useState('Iniciando sistema...');
 
-  const [isPlanGenerating, setIsPlanGenerating] = useState(false);
-  const [isWaitingForStrategy, setIsWaitingForStrategy] = useState(false);
-  
-  const isFetchingRef = useRef(false);
-
-  // --- 1. SESSION MANAGEMENT ---
+  // 1. INITIALIZATION
   useEffect(() => {
+    // If Supabase is not configured, we go straight to Auth Required to let user choose Demo Mode
     if (!isSupabaseConfigured()) {
-      setIsCheckingSession(false);
-      setView('auth');
+      setStatus('AUTH_REQUIRED'); 
       return;
     }
 
-    const initSession = async () => {
-      try {
-        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
-        
-        if (error || !initialSession) {
-           console.log("No active session found.");
-           setSession(null);
-           setView('auth');
-        } else {
-           console.log("Session found:", initialSession.user.email);
-           setSession(initialSession);
-        }
-      } catch (e) {
-        console.error("Session check error:", e);
-        setView('auth');
-      } finally {
-        setIsCheckingSession(false);
-      }
-    };
-
-    initSession();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      if (!newSession) {
-        setBusinessId(null);
-        setProfile(null);
-        setStrategy(null);
-        isFetchingRef.current = false;
-        setView('auth');
-      }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setStatus(session ? 'LOADING_DATA' : 'AUTH_REQUIRED');
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (!session) setStatus('AUTH_REQUIRED');
+      else if (status === 'AUTH_REQUIRED') setStatus('LOADING_DATA'); 
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // --- 2. DATA RECOVERY LOGIC ---
-  const recoverStrategy = async (currentProfile: UserProfile, bId: string) => {
-    console.log("🔄 Regenerating missing strategy/audit...");
-    setView('loading');
-    setLoadingMessage('Recuperando análisis estratégico...');
-    
-    try {
-      // 1. Regenerate Audit
-      const generatedAudit = await generateAuditStream(currentProfile, language, (text) => setStreamingLog(text));
-      setAudit(generatedAudit);
-      setStreamingLog('');
-      
-      // 2. Regenerate Strategy
-      setLoadingMessage('Regenerando plan de acción...');
-      const plan = await generateActionPlan(currentProfile, generatedAudit, language);
-      const fullStrategy = { ...plan, audit: generatedAudit };
-      
-      // 3. Save
-      await saveStrategySnapshot(bId, currentProfile, fullStrategy);
-      
-      setStrategy(fullStrategy);
-      setView('dashboard');
-    } catch (e) {
-      console.error("Recovery failed", e);
-      setAppError("Error recuperando datos. Es posible que la IA esté saturada.");
-      setView('error');
-    }
-  };
-
-  // --- 3. DATA SYNC ---
+  // 2. DATA LOADING (The critical part)
   useEffect(() => {
-    const syncData = async () => {
-      if (!session?.user?.id || isFetchingRef.current || isCheckingSession) return;
-      if (businessId && profile && strategy) return; // Already loaded
-
-      isFetchingRef.current = true;
-      setView('loading');
-      setLoadingMessage('Sincronizando tu progreso...');
-      setShowSlowLoading(false);
-
-      try {
-        const data: UserData | null = await loadUserData(session.user.id);
-        
-        if (!data) throw new Error("AUTH_SYNC_FAILED");
-
-        const { businessId: bId, profile: uProfile, strategy: uStrategy, weeklyPlan: uPlan } = data;
-
-        // SCENARIO A: NEW / PARTIAL
-        if (!bId || !uProfile || !uProfile.isConfigured) {
-          console.log("🆕 New/Partial User Detected");
-          if (uProfile) setProfile(uProfile);
-          setView('transition'); 
-          isFetchingRef.current = false;
-          return;
-        }
-
-        // SCENARIO B: ESTABLISHED USER
-        console.log("✅ Profile Loaded");
-        setBusinessId(bId);
-        setProfile(uProfile);
-        
-        if (uProfile.language) setLanguage(uProfile.language);
-        if (data.executionState) setExecutionState(data.executionState);
-        if (uPlan) setWeeklyPlan(uPlan);
-
-        if (uStrategy) {
-           console.log("✅ Strategy Loaded");
-           setStrategy(uStrategy);
-           setAudit(uStrategy.audit);
-           setView(uPlan ? 'weekly_agency' : 'dashboard');
-        } else {
-           console.log("⚠️ Profile found but NO STRATEGY. Triggering recovery.");
-           isFetchingRef.current = false; // Allow recovery function to run
-           recoverStrategy(uProfile, bId);
-           return;
-        }
-
-      } catch (err: any) {
-        console.error("❌ Sync Error:", err);
-        setLoadingMessage('Error al cargar datos.');
-        setAppError("No pudimos cargar tus datos. Intenta recargar.");
-        setView('error');
-      } finally {
-        isFetchingRef.current = false;
-      }
-    };
-
-    if (session) {
-        syncData();
+    if (status === 'LOADING_DATA' && session?.user?.id) {
+      setLoadingMsg("Sincronizando tu progreso...");
+      loadUserData(session.user.id)
+        .then((data: UserData) => {
+          setAppState(data.status);
+          setBusinessId(data.businessId);
+          setProfile(data.profile);
+          setStrategy(data.strategy);
+          setExecutionState(data.executionState);
+          setWeeklyPlan(data.weeklyPlan);
+          
+          if (data.profile?.language) setLang(data.profile.language as any);
+          
+          setStatus('APP_READY');
+        })
+        .catch(err => {
+          console.error("Init Error:", err);
+          alert("Error cargando datos. Por favor recarga.");
+        });
     }
-  }, [session, isCheckingSession, businessId]); 
-
-  const handleForcedLogout = async (msg?: string) => {
-    setAppError(msg || null);
-    isFetchingRef.current = false;
-    await signOut();
-    setSession(null);
-    setProfile(null);
-    setStrategy(null);
-    setView('auth');
-  };
-
-  const handleResetAccount = async () => {
-    if (!session?.user?.id) return;
-    if (!window.confirm("¿Estás seguro? Esto borrará tu perfil y tendrás que empezar el onboarding de nuevo.")) return;
-    
-    setView('loading');
-    setLoadingMessage("Reseteando tu cuenta...");
-    try {
-        await resetUserAccount(session.user.id);
-        // Force reload to clear all states
-        window.location.reload();
-    } catch (e) {
-        console.error(e);
-        setAppError("No se pudo resetear. Intenta contactar soporte.");
-        setView('error');
-    }
-  };
+  }, [status, session]);
 
   // --- HANDLERS ---
-  const handleLanguageChange = (lang: Language) => {
-    setLanguage(lang);
-    if (profile) setProfile({ ...profile, language: lang });
+  
+  const handleAuthSuccess = (userId: string) => {
+      // Called by AuthView. If demo mode, userId is 'demo-user'.
+      setSession({ user: { id: userId, email: 'demo@upgrowth.ai' } });
+      setStatus('LOADING_DATA');
   };
 
-  const handlePartialOnboardingSave = async (partialData: any) => {
-    if (session?.user?.id) {
-      const merged = { ...profile, ...partialData };
-      setProfile(merged as UserProfile);
-      await updateOnboardingProgress(session.user.id, partialData);
-    }
+  const handleLogout = () => {
+      if (!isSupabaseConfigured()) {
+          setSession(null);
+          setStatus('AUTH_REQUIRED');
+          setAppState('NEW_USER');
+      } else {
+          signOut();
+      }
   };
 
-  const handleOnboardingComplete = (newProfile: UserProfile) => {
-    setProfile(newProfile);
-    handleProfileSave(newProfile);
-  };
-
-  const triggerStrategyGeneration = async (profileData: UserProfile, auditData: BusinessAudit, bizId: string) => {
-    setIsPlanGenerating(true);
-    try {
-      const plan = await generateActionPlan(profileData, auditData, language);
-      const fullStrategy = { ...plan, audit: auditData };
-      await saveStrategySnapshot(bizId, profileData, fullStrategy);
-      setStrategy(fullStrategy);
-    } catch (err) {
-      console.error("Error generating strategy:", err);
-      setAppError("Error generando la estrategia.");
-    } finally {
-      setIsPlanGenerating(false);
-    }
-  };
-
-  const handleProfileSave = async (profileData: UserProfile) => {
+  const handleOnboardingComplete = async (newProfile: UserProfile) => {
     if (!session?.user?.id) return;
-    setView('loading');
-    setLoadingMessage('Guardando perfil y generando análisis...');
+    setLoadingMsg("Guardando perfil...");
+    setStatus('LOADING_DATA'); 
     try {
-      const business = await saveBusinessProfile(session.user.id, profileData);
-      setBusinessId(business.id);
-      setView('report'); 
-      const generatedAudit = await generateAuditStream(profileData, language, (text) => setStreamingLog(text));
-      setAudit(generatedAudit);
-      setStreamingLog(''); 
-      triggerStrategyGeneration(profileData, generatedAudit, business.id);
-    } catch (e: any) {
-      console.error("Save Profile Error:", e);
-      if (businessId) setView('dashboard'); 
-      else {
-        setAppError("Error guardando el perfil.");
-        setView('onboarding');
-      }
-    }
-  };
-
-  const handleAuthSuccess = async () => {};
-  
-  const handleTransitionComplete = () => setView('onboarding');
-
-  const handleReportContinue = () => {
-    if (strategy) {
-      setView('roadmap');
-      return;
-    }
-    setIsWaitingForStrategy(true);
-    if (!isPlanGenerating && profile && audit && businessId && !strategy) {
-       triggerStrategyGeneration(profile, audit, businessId);
-    }
-  };
-
-  useEffect(() => {
-    if (isWaitingForStrategy && strategy) {
-      setIsWaitingForStrategy(false);
-      setView('roadmap');
-    }
-  }, [strategy, isWaitingForStrategy]);
-
-  const handleStartPriority = () => setView('wow');
-  const handleWowContinue = () => setView('dashboard');
-  const handleCompletePriority = () => setView('completion');
-  
-  const handleEnterWeeklyMode = async () => {
-    if (!profile) return;
-    if (weeklyPlan) { setView('weekly_agency'); return; }
-    setView('loading');
-    setLoadingMessage(t('generating_week', language));
-    try {
-      const plan = await generateWeeklyAgencyPlan(profile, language);
-      setWeeklyPlan(plan);
-      if (session?.user?.id && businessId) {
-        await saveUserProgress(session.user.id, businessId, 'weekly', plan);
-      }
-      setView('weekly_agency');
+      const biz = await saveBusinessProfile(session.user.id, newProfile);
+      setBusinessId(biz.id);
+      setProfile(newProfile);
+      setAppState('STRATEGY_GENERATION_NEEDED');
+      setStatus('APP_READY');
     } catch (e) {
       console.error(e);
-      setView('dashboard'); 
+      alert("Error guardando perfil");
+      setStatus('APP_READY');
     }
   };
 
-  const handleLogout = async () => {
-    setView('loading');
-    setLoadingMessage('Cerrando sesión...');
-    await handleForcedLogout();
+  const handleStrategyComplete = (newStrategy: ComprehensiveStrategy) => {
+    setStrategy(newStrategy);
+    setAppState('READY');
+    setCurrentView('report'); 
   };
 
-  const handleUpdateExecution = (stepIndex: number, data: Record<string, string>) => {
-    const newState = { ...executionState, [stepIndex]: data };
-    setExecutionState(newState);
-    if (session?.user?.id && businessId) {
-      saveUserProgress(session.user.id, businessId, 'execution', newState);
+  const handleWeeklyPlanGen = async () => {
+    if (!profile) return;
+    setLoadingMsg("Generando plan semanal...");
+    setStatus('LOADING_DATA');
+    try {
+      const plan = await generateWeeklyAgencyPlan(profile, lang);
+      setWeeklyPlan(plan);
+      if (businessId) await saveUserProgress(session.user.id, businessId, 'weekly', plan);
+      setStatus('APP_READY');
+      setCurrentView('weekly_agency');
+    } catch (e) {
+      console.error(e);
+      setStatus('APP_READY');
     }
   };
 
-  const handleUpdateWeeklyTask = (taskIndex: number, isCompleted: boolean) => {
-    if (!weeklyPlan) return;
-    const newTasks = [...weeklyPlan.dailyPlan];
-    newTasks[taskIndex].isCompleted = isCompleted;
-    const newPlan = { ...weeklyPlan, dailyPlan: newTasks };
-    setWeeklyPlan(newPlan);
-    if (session?.user?.id && businessId) {
-      saveUserProgress(session.user.id, businessId, 'weekly', newPlan);
+  const handleReset = async () => {
+    if (confirm("¿Estás seguro de borrar todo?")) {
+      setLoadingMsg("Reseteando cuenta...");
+      setStatus('LOADING_DATA');
+      await resetUserAccount(session.user.id);
+      window.location.reload();
     }
   };
 
-  const handleSidebarClick = (action: string) => {
-    if (action === 'roadmap') { setView('roadmap'); return; }
-    if (action === 'hero') {
-      if (weeklyPlan) setView('weekly_agency');
-      else setView('dashboard');
-    }
-    setSidebarAction(action);
-    setTimeout(() => setSidebarAction(''), 100);
-  };
+  // --- RENDERER ---
 
-  const getCurrentPhaseIndex = () => {
-    if (!strategy) return 0;
-    const activeIndex = strategy.roadmap.findIndex(r => r.status === 'active');
-    return activeIndex === -1 ? 0 : activeIndex;
-  };
-
-  // --- RENDER ---
-
-  if (isCheckingSession) {
-     return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-950">
-           <Loading message="Iniciando seguridad..." />
-        </div>
-     );
-  }
-
-  if (!session) {
-     return <AuthView onSuccess={handleAuthSuccess} />;
-  }
-
-  if (view === 'error') {
-     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6 text-center">
-        <div className="glass-panel p-10 border-red-500/20 max-w-lg">
-           <div className="text-5xl mb-4">🔌</div>
-           <h2 className="text-2xl font-bold text-white mb-2">Conexión Interrumpida</h2>
-           <p className="text-slate-400 mb-6">{appError || "Ocurrió un error inesperado al cargar tus datos."}</p>
-           
-           <div className="space-y-3">
-             <Button onClick={() => window.location.reload()}>Reintentar Conexión</Button>
-             
-             <div className="pt-4 border-t border-white/5">
-                <p className="text-xs text-slate-500 mb-2">¿Sigues teniendo problemas?</p>
-                <button 
-                  onClick={handleResetAccount}
-                  className="px-4 py-2 rounded-lg bg-red-900/20 text-red-400 border border-red-500/30 text-xs font-bold hover:bg-red-900/40 transition-colors w-full"
-                >
-                  ⚠️ Resetear mis datos y empezar de cero
-                </button>
-             </div>
-
-             <button onClick={() => handleForcedLogout()} className="block mx-auto mt-2 text-slate-500 text-xs hover:text-white underline">
-               Cerrar Sesión y Salir
-             </button>
-           </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (view === 'loading') {
+  if (status === 'INITIALIZING' || status === 'LOADING_DATA') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
-         <Loading 
-            message={loadingMessage} 
-            subMessage={isPlanGenerating ? "Generando estrategia maestra..." : undefined}
-            streamLog={streamingLog}
-            showReset={showSlowLoading}
-            onReset={handleForcedLogout}
-         />
+        <Loading message={loadingMsg} />
       </div>
     );
   }
 
-  if (view === 'transition') return <TransitionScreen onComplete={handleTransitionComplete} userEmail={session.user.email} onLogout={handleForcedLogout} />;
-  
-  if (view === 'onboarding') {
+  if (status === 'AUTH_REQUIRED') {
+    return <AuthView onSuccess={handleAuthSuccess} />;
+  }
+
+  // --- MAIN ROUTER ---
+
+  // 1. Onboarding Flow
+  if (appState === 'NEW_USER' || appState === 'ONBOARDING_IN_PROGRESS') {
+    if (currentView === 'transition') {
+      return <TransitionScreen onComplete={() => setCurrentView('onboarding_form')} userEmail={session.user.email} />;
+    }
+    // Default to onboarding form
     return (
       <>
-        <LanguageSwitcher currentLang={language} onToggle={handleLanguageChange} />
-        <div className="absolute top-6 left-6 z-50">
-           <button onClick={handleLogout} className="text-slate-500 text-xs font-bold uppercase tracking-widest hover:text-white transition-colors border border-white/10 px-3 py-1.5 rounded-full bg-slate-900/50 backdrop-blur-md">
-             Salir (Guardar y Salir)
-           </button>
-        </div>
+        <div className="fixed top-4 right-4 z-50"><button onClick={handleLogout} className="text-slate-500 text-xs hover:text-white">Salir</button></div>
         <Onboarding 
-          onComplete={handleOnboardingComplete} 
-          onStepSave={handlePartialOnboardingSave}
-          initialData={profile} 
+          initialData={profile}
+          onComplete={handleOnboardingComplete}
+          onStepSave={(data) => updateOnboardingProgress(session.user.id, data)}
         />
       </>
     );
   }
 
-  if (view === 'report' && profile && audit) {
+  // 2. Strategy Generation Flow
+  if (appState === 'STRATEGY_GENERATION_NEEDED') {
     return (
-      <ConsultancyReport 
-        profile={profile} 
-        auditData={audit} 
-        onContinue={handleReportContinue} 
-        isLoadingPlan={isPlanGenerating || isWaitingForStrategy} 
+      <StrategyGenerator 
+        profile={profile!} 
+        businessId={businessId!} 
+        onComplete={handleStrategyComplete}
+        onError={(msg: string) => alert(msg)} 
+        lang={lang}
       />
     );
   }
-  
-  const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+
+  // 3. Main Dashboard Flow (READY State)
+  const MainLayout = ({ children }: any) => (
     <div className="flex min-h-screen bg-slate-950">
       <Sidebar 
         onLogout={handleLogout} 
-        onSettings={() => setView('pricing')} 
-        activeView={view} 
-        onNavigate={handleSidebarClick} 
-        lang={language} 
-        currentPhaseIndex={getCurrentPhaseIndex()} 
+        onSettings={() => setCurrentView('pricing')} 
+        activeView={currentView}
+        onNavigate={(view) => setCurrentView(view)}
+        lang={lang}
+        currentPhaseIndex={2} // Mock for now
       />
-      <main className="flex-1 md:ml-72 relative min-h-screen transition-all duration-300">
-         <div className="md:hidden flex justify-between items-center p-6 border-b border-white/5">
-            <span className="text-white font-bold">upGrowt</span>
-            <button onClick={handleLogout} className="text-slate-400 text-sm">Salir</button>
-         </div>
-         <div className="w-full max-w-7xl mx-auto p-4 md:p-8 lg:p-12">
-            {children}
-         </div>
+      <main className="flex-1 md:ml-72 p-6 md:p-12 overflow-x-hidden">
+        {children}
       </main>
     </div>
   );
-  
-  if (view === 'roadmap' && strategy && profile) {
+
+  // Router within READY state
+  const renderContent = () => {
+    switch (currentView) {
+      case 'report':
+        return <ConsultancyReport profile={profile!} auditData={strategy!.audit} onContinue={() => setCurrentView('roadmap')} />;
+      case 'roadmap':
+        return <RoadmapView phases={strategy!.roadmap} profile={profile!} lang={lang} onStartPriority={() => setCurrentView('wow')} />;
+      case 'wow':
+        return <WowMoment focus={strategy!.priorityFocus} onContinue={() => setCurrentView('default')} />;
+      case 'pricing':
+        return <Pricing onBack={() => setCurrentView('default')} />;
+      case 'weekly_agency':
+        return weeklyPlan 
+          ? <WeeklyAgencyDashboard plan={weeklyPlan} profile={profile!} lang={lang} strategy={strategy} onUpdateTask={() => {}} />
+          : <div className="text-white">Error: No weekly plan</div>;
+      case 'completion':
+        return <CompletionSuccess onNext={handleWeeklyPlanGen} lang={lang} />;
+      default:
+        // Dashboard Home
+        return (
+          <DashboardHome 
+            strategy={strategy!} 
+            profile={profile!} 
+            businessName={profile!.businessName} 
+            onCompletePriority={() => setCurrentView('completion')}
+            lang={lang}
+            onUpdateExecution={(idx, data) => {
+               const newState = { ...executionState, [idx]: data };
+               setExecutionState(newState);
+               saveUserProgress(session.user.id, businessId!, 'execution', newState);
+            }}
+            savedExecutionState={executionState}
+          />
+        );
+    }
+  };
+
+  if (currentView === 'report' || currentView === 'roadmap' || currentView === 'wow' || currentView === 'completion' || currentView === 'pricing') {
+    // Fullscreen views
     return (
-      <MainLayout>
-         <RoadmapView phases={strategy.roadmap} profile={profile} lang={language} onStartPriority={handleStartPriority} />
-      </MainLayout>
+      <>
+         <div className="fixed top-4 right-4 z-50">
+            <LanguageSwitcher currentLang={lang} onToggle={setLang} />
+         </div>
+         {renderContent()}
+      </>
     );
   }
 
-  if (view === 'wow' && strategy) return <WowMoment focus={strategy.priorityFocus} onContinue={handleWowContinue} />;
-  if (view === 'completion') return <CompletionSuccess onNext={handleEnterWeeklyMode} lang={language} />;
-  if (view === 'pricing') return <Pricing onBack={() => setView(weeklyPlan ? 'weekly_agency' : 'dashboard')} />;
-
-  if (view === 'weekly_agency' && profile && weeklyPlan && strategy) {
-    return (
-      <MainLayout>
-         <WeeklyAgencyDashboard plan={weeklyPlan} profile={profile} lang={language} onUpdateTask={handleUpdateWeeklyTask} strategy={strategy} />
-      </MainLayout>
-    );
-  }
-
-  if (view === 'dashboard' && profile && strategy) {
-    return (
-      <MainLayout>
-         <DashboardHome strategy={strategy} profile={profile} businessName={profile.businessName} onCompletePriority={handleCompletePriority} activeSidebarAction={sidebarAction} lang={language} onUpdateExecution={handleUpdateExecution} savedExecutionState={executionState} />
-      </MainLayout>
-    );
-  }
-
+  // Standard Dashboard Layout
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950">
-       <Loading message="Restaurando sesión..." onReset={handleLogout} showReset={true} />
-    </div>
+    <MainLayout>
+      <div className="fixed top-4 right-4 z-50 flex gap-2">
+         <button onClick={handleReset} className="px-3 py-1 bg-red-900/50 text-red-400 text-xs rounded border border-red-500/30">Reset</button>
+         <LanguageSwitcher currentLang={lang} onToggle={setLang} />
+      </div>
+      {renderContent()}
+    </MainLayout>
   );
 }

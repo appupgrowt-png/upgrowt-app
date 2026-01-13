@@ -1,7 +1,8 @@
 
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export const signIn = async (email: string, pass: string) => {
+  if (!isSupabaseConfigured()) throw new Error("Backend not configured");
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password: pass,
@@ -11,6 +12,7 @@ export const signIn = async (email: string, pass: string) => {
 };
 
 export const signUp = async (email: string, pass: string) => {
+  if (!isSupabaseConfigured()) throw new Error("Backend not configured");
   const { data, error } = await supabase.auth.signUp({
     email,
     password: pass,
@@ -20,6 +22,7 @@ export const signUp = async (email: string, pass: string) => {
 };
 
 export const signOut = async () => {
+  if (!isSupabaseConfigured()) return;
   try {
     const { error } = await supabase.auth.signOut();
     if (error) console.error("Error signing out:", error.message);
@@ -29,7 +32,13 @@ export const signOut = async () => {
 };
 
 export const getSession = async () => {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) return null;
-  return data.session;
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return null;
+    return data.session;
+  } catch (error) {
+    console.error("Error getting session:", error);
+    return null;
+  }
 };
